@@ -4,6 +4,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-04-29
+
 ### Reference implementation (Go)
 
 #### Changed
@@ -31,3 +33,5 @@ All notable changes to the Go implementation of Harnas are recorded here.
 - Scripted streaming fixtures can now model mid-stream provider
   failures by appending `assistant_turn_failed` before raising the
   provider error.
+
+[0.4.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.4.0

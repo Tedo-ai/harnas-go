@@ -7,6 +7,8 @@ This repo is a conformance-first peer implementation. It starts with
 the smallest buffered AgentLoop surface and grows fixture by fixture
 toward parity with the Ruby reference.
 
+**Version 0.4.0** (2026-04-29). Tracks Harnas spec 0.4.0.
+
 ## Status
 
 - Agent conformance: 20/20 fixtures passing
@@ -21,6 +23,7 @@ toward parity with the Ruby reference.
 ```sh
 go test ./...
 bin/conformance
+bin/conformance-roundtrip --help
 ```
 
 `bin/conformance` resolves fixtures from a sibling checkout of
