@@ -1,6 +1,9 @@
 package harnas
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type MarkerTail struct {
 	MaxMessages int
@@ -51,4 +54,40 @@ func messageEvents(log *Log) []Event {
 		}
 	}
 	return events
+}
+
+type DenyByName struct {
+	Names        []string
+	ReasonFormat string
+}
+
+func (d DenyByName) Install(session *Session) {
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		name, _ := toolUse.Payload["name"].(string)
+		if !containsString(d.Names, name) {
+			return map[string]any{"allow": true}
+		}
+		reasonFormat := d.ReasonFormat
+		if reasonFormat == "" {
+			reasonFormat = "tool $NAME is on the deny-list"
+		}
+		return map[string]any{
+			"allow":  false,
+			"reason": replaceName(reasonFormat, name),
+		}
+	})
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
+func replaceName(format, name string) string {
+	return strings.ReplaceAll(format, "$NAME", fmt.Sprintf("%q", name))
 }

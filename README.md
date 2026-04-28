@@ -9,14 +9,17 @@ toward parity with the Ruby reference.
 
 ## Status
 
-- `minimal-chat`: passing
-- Remaining fixtures: in progress
+- Agent conformance: 13/13 fixtures passing
+- Buffered and streaming AgentLoop paths
+- Anthropic, OpenAI, and Gemini fixture ingestors
+- Session-scoped hooks, MarkerTail compaction, DenyByName permission
+- Scripted provider errors and provider_error Log events
 
 ## Run
 
 ```sh
 go test ./...
-bin/conformance --fixture minimal-chat
+bin/conformance
 ```
 
 `bin/conformance` resolves fixtures from a sibling checkout of

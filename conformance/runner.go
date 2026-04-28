@@ -65,6 +65,12 @@ func Run(fixtureDir string) (Result, error) {
 				KeepRecent:  int(strategy.Config["keep_recent"].(float64)),
 			}.Install(session)
 		}
+		if strategy.Name == "Permission::DenyByName" {
+			harnas.DenyByName{
+				Names:        stringSlice(strategy.Config["names"]),
+				ReasonFormat: optionalString(strategy.Config["reason_format"]),
+			}.Install(session)
+		}
 	}
 
 	loop := harnas.AgentLoop{
@@ -137,6 +143,25 @@ func ingestorFor(kind string) harnas.Ingestor {
 	default:
 		return harnas.AnthropicIngestor{}
 	}
+}
+
+func stringSlice(value any) []string {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}
+
+func optionalString(value any) string {
+	text, _ := value.(string)
+	return text
 }
 
 func readJSON(path string, target any) error {

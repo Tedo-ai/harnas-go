@@ -48,6 +48,14 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 		})
 		return
 	}
+	if tool.Handler == "conformance.raise_error" {
+		log.Append(EventToolResult, map[string]any{
+			"tool_use_id": id,
+			"output":      nil,
+			"error":       "RuntimeError: conformance tool error",
+		})
+		return
+	}
 
 	encoded, _ := json.Marshal(args)
 	log.Append(EventToolResult, map[string]any{

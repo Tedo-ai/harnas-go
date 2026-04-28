@@ -9,6 +9,7 @@ const (
 	EventToolResult           EventType = "tool_result"
 	EventCompact              EventType = "compact"
 	EventAnnotation           EventType = "annotation"
+	EventProviderError        EventType = "provider_error"
 	EventAssistantTurnStarted EventType = "assistant_turn_started"
 	EventAssistantTextDelta   EventType = "assistant_text_delta"
 	EventToolUseBegin         EventType = "tool_use_begin"

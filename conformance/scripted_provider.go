@@ -6,6 +6,19 @@ import (
 	harnas "github.com/Tedo-ai/harnas-go"
 )
 
+type ProviderHTTPError struct {
+	Status int
+	Body   string
+}
+
+func (e ProviderHTTPError) Error() string {
+	return fmt.Sprintf("HTTP %d: %s", e.Status, e.Body)
+}
+
+func (e ProviderHTTPError) HTTPStatus() int {
+	return e.Status
+}
+
 type ScriptedProvider struct {
 	responses []map[string]any
 }
@@ -47,6 +60,13 @@ func stringValue(value any) string {
 	return ""
 }
 
+func floatValue(value any) float64 {
+	if typed, ok := value.(float64); ok {
+		return typed
+	}
+	return 0
+}
+
 func NewScriptedProvider(responses []map[string]any) *ScriptedProvider {
 	return &ScriptedProvider{responses: append([]map[string]any(nil), responses...)}
 }
@@ -57,5 +77,11 @@ func (p *ScriptedProvider) Call(_ map[string]any) (map[string]any, error) {
 	}
 	response := p.responses[0]
 	p.responses = p.responses[1:]
+	if errorSpec, ok := response["error"].(map[string]any); ok {
+		return nil, ProviderHTTPError{
+			Status: int(floatValue(errorSpec["status"])),
+			Body:   stringValue(errorSpec["body"]),
+		}
+	}
 	return response, nil
 }
