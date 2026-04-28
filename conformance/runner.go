@@ -20,41 +20,72 @@ type Result struct {
 
 func Run(fixtureDir string) (Result, error) {
 	fixture := filepath.Base(fixtureDir)
-
-	var manifest struct {
-		Name     string `json:"name"`
-		System   string `json:"system"`
-		Provider struct {
-			Kind      string `json:"kind"`
-			Model     string `json:"model"`
-			MaxTokens int    `json:"max_tokens"`
-		} `json:"provider"`
-		Tools []struct {
-			Name    string `json:"name"`
-			Handler string `json:"handler"`
-		} `json:"tools"`
-		Strategies []struct {
-			Name   string         `json:"name"`
-			Config map[string]any `json:"config"`
-		} `json:"strategies"`
-	}
-	if err := readJSON(filepath.Join(fixtureDir, "manifest.json"), &manifest); err != nil {
+	manifest, err := LoadManifest(fixtureDir)
+	if err != nil {
 		return Result{}, err
 	}
-
 	streaming := fileExists(filepath.Join(fixtureDir, "provider-script-stream.json"))
+	scriptPath := "provider-script.json"
+	if streaming {
+		scriptPath = "provider-script-stream.json"
+	}
 
 	var inputs []any
 	if err := readJSON(filepath.Join(fixtureDir, "inputs.json"), &inputs); err != nil {
 		return Result{}, err
 	}
 
-	expected, err := readExpected(filepath.Join(fixtureDir, "expected-log.jsonl"))
+	expected, err := ReadExpected(filepath.Join(fixtureDir, "expected-log.jsonl"))
 	if err != nil {
 		return Result{}, err
 	}
 
-	session := harnas.CreateSession(map[string]any{"manifest_name": manifest.Name})
+	session, err := RunSession(manifest, filepath.Join(fixtureDir, scriptPath), inputs, nil)
+	if err != nil {
+		return Result{}, err
+	}
+
+	actual := session.Log.Events()
+	diff := FirstDiff(actual, expected)
+	return Result{
+		Fixture:  fixture,
+		Passed:   diff == "",
+		Actual:   actual,
+		Expected: expected,
+		Diff:     diff,
+	}, nil
+}
+
+type Manifest struct {
+	Name     string `json:"name"`
+	System   string `json:"system"`
+	Provider struct {
+		Kind      string `json:"kind"`
+		Model     string `json:"model"`
+		MaxTokens int    `json:"max_tokens"`
+	} `json:"provider"`
+	Tools []struct {
+		Name    string `json:"name"`
+		Handler string `json:"handler"`
+	} `json:"tools"`
+	Strategies []struct {
+		Name   string         `json:"name"`
+		Config map[string]any `json:"config"`
+	} `json:"strategies"`
+}
+
+func LoadManifest(fixtureDir string) (Manifest, error) {
+	var manifest Manifest
+	err := readJSON(filepath.Join(fixtureDir, "manifest.json"), &manifest)
+	return manifest, err
+}
+
+func RunSession(manifest Manifest, scriptPath string, inputs []any, session *harnas.Session) (*harnas.Session, error) {
+	streaming := filepath.Base(scriptPath) == "provider-script-stream.json" || filepath.Base(scriptPath) == "phase-1-provider-script-stream.json" || filepath.Base(scriptPath) == "phase-2-provider-script-stream.json"
+
+	if session == nil {
+		session = harnas.CreateSession(map[string]any{"manifest_name": manifest.Name})
+	}
 	registry := harnas.NewRegistry()
 	for _, tool := range manifest.Tools {
 		registry.Register(harnas.Tool{Name: tool.Name, Handler: tool.Handler})
@@ -92,14 +123,14 @@ func Run(fixtureDir string) (Result, error) {
 	}
 	if streaming {
 		var streams [][]map[string]any
-		if err := readJSON(filepath.Join(fixtureDir, "provider-script-stream.json"), &streams); err != nil {
-			return Result{}, err
+		if err := readJSON(scriptPath, &streams); err != nil {
+			return nil, err
 		}
 		loop.StreamProvider = NewScriptedStreamProvider(streams)
 	} else {
 		var script []map[string]any
-		if err := readJSON(filepath.Join(fixtureDir, "provider-script.json"), &script); err != nil {
-			return Result{}, err
+		if err := readJSON(scriptPath, &script); err != nil {
+			return nil, err
 		}
 		loop.Provider = NewScriptedProvider(script)
 	}
@@ -123,7 +154,7 @@ func Run(fixtureDir string) (Result, error) {
 				parent := session
 				forked := parent.Fork(atSeq)
 				if err := verifyFork(parent, forked, atSeq); err != nil {
-					return Result{}, err
+					return nil, err
 				}
 				session = forked
 				loop.Session = forked
@@ -133,19 +164,11 @@ func Run(fixtureDir string) (Result, error) {
 		}
 		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
 		if _, err := loop.Run(); err != nil {
-			return Result{}, err
+			return nil, err
 		}
 	}
 
-	actual := session.Log.Events()
-	diff := firstDiff(actual, expected)
-	return Result{
-		Fixture:  fixture,
-		Passed:   diff == "",
-		Actual:   actual,
-		Expected: expected,
-		Diff:     diff,
-	}, nil
+	return session, nil
 }
 
 func verifyFork(parent, forked *harnas.Session, atSeq int) error {
@@ -168,8 +191,8 @@ func verifyFork(parent, forked *harnas.Session, atSeq int) error {
 	return nil
 }
 
-func firstDiff(actual, expected []harnas.Event) string {
-	if reflect.DeepEqual(actual, expected) {
+func FirstDiff(actual, expected []harnas.Event) string {
+	if eventSlicesEqual(actual, expected) {
 		return ""
 	}
 	limit := len(actual)
@@ -177,11 +200,29 @@ func firstDiff(actual, expected []harnas.Event) string {
 		limit = len(expected)
 	}
 	for i := range limit {
-		if !reflect.DeepEqual(actual[i], expected[i]) {
+		if !eventsEqual(actual[i], expected[i]) {
 			return fmt.Sprintf("seq %d actual=%#v expected=%#v", i, actual[i], expected[i])
 		}
 	}
 	return fmt.Sprintf("length actual=%d expected=%d", len(actual), len(expected))
+}
+
+func eventSlicesEqual(left, right []harnas.Event) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if !eventsEqual(left[i], right[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+func eventsEqual(left, right harnas.Event) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func projectionFor(kind, model string, maxTokens int, system string) harnas.Projection {
@@ -238,7 +279,7 @@ func fileExists(path string) bool {
 	return err == nil && !stat.IsDir()
 }
 
-func readExpected(path string) ([]harnas.Event, error) {
+func ReadExpected(path string) ([]harnas.Event, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err

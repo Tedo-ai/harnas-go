@@ -2,7 +2,9 @@ package harnas
 
 import (
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"os"
 )
 
 type Session struct {
@@ -46,6 +48,88 @@ func (s *Session) Fork(atSeq int) *Session {
 	metadata["forked_from"] = s.ID
 	metadata["forked_at_seq"] = float64(atSeq)
 	return NewSession("ses_"+newID(), forkedLog, metadata)
+}
+
+func (s *Session) Save(path string) error {
+	file, err := os.Create(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	encoder := json.NewEncoder(file)
+	encoder.SetEscapeHTML(false)
+	if err := encoder.Encode(map[string]any{
+		"__session__": true,
+		"id":          s.ID,
+		"metadata":    s.Metadata,
+	}); err != nil {
+		return err
+	}
+	for _, event := range s.Log.Events() {
+		if err := encoder.Encode(map[string]any{
+			"seq":     event.Seq,
+			"id":      fmt.Sprintf("evt_%d_go", event.Seq),
+			"type":    event.Type,
+			"payload": event.Payload,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func LoadSession(path string) (*Session, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitJSONLines(data)
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("session file is empty")
+	}
+	var header struct {
+		Session  bool           `json:"__session__"`
+		ID       string         `json:"id"`
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.Unmarshal(lines[0], &header); err != nil {
+		return nil, err
+	}
+	if !header.Session {
+		return nil, fmt.Errorf("missing session header")
+	}
+
+	log := NewLog()
+	for _, line := range lines[1:] {
+		var row struct {
+			Seq     int            `json:"seq"`
+			Type    EventType      `json:"type"`
+			Payload map[string]any `json:"payload"`
+		}
+		if err := json.Unmarshal(line, &row); err != nil {
+			return nil, err
+		}
+		log.Restore(Event{Seq: row.Seq, Type: row.Type, Payload: row.Payload})
+	}
+	return NewSession(header.ID, log, header.Metadata), nil
+}
+
+func splitJSONLines(data []byte) [][]byte {
+	out := [][]byte{}
+	start := 0
+	for i, b := range data {
+		if b == '\n' {
+			if i > start {
+				out = append(out, data[start:i])
+			}
+			start = i + 1
+		}
+	}
+	if start < len(data) {
+		out = append(out, data[start:])
+	}
+	return out
 }
 
 func newID() string {
