@@ -15,6 +15,9 @@ All notable changes to the Go implementation of Harnas are recorded here.
   for Session JSONL cross-language round-trip conformance. The Go
   implementation now participates in the Ruby/Python/Go 3x3
   persistence matrix.
+- Added property-style Go tests for mutation idempotence, projection
+  purity, dense seq assignment, fork prefixes, and compact/revert
+  composition.
 - Added `Session.Fork` and conformance fork actions with prefix and
   metadata verification.
 - Added mutation application for projections and conformance input
