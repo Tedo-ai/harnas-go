@@ -23,6 +23,7 @@ func Run(fixtureDir string) (Result, error) {
 
 	var manifest struct {
 		Name     string `json:"name"`
+		System   string `json:"system"`
 		Provider struct {
 			Kind      string `json:"kind"`
 			Model     string `json:"model"`
@@ -75,7 +76,7 @@ func Run(fixtureDir string) (Result, error) {
 
 	loop := harnas.AgentLoop{
 		Session:    session,
-		Projection: projectionFor(manifest.Provider.Model, manifest.Provider.MaxTokens),
+		Projection: projectionFor(manifest.Provider.Kind, manifest.Provider.Model, manifest.Provider.MaxTokens, manifest.System),
 		Ingestor:   ingestorFor(manifest.Provider.Kind),
 		MaxTurns:   3,
 	}
@@ -130,8 +131,15 @@ func firstDiff(actual, expected []harnas.Event) string {
 	return fmt.Sprintf("length actual=%d expected=%d", len(actual), len(expected))
 }
 
-func projectionFor(model string, maxTokens int) harnas.Projection {
-	return harnas.AnthropicProjection{Model: model, MaxTokens: maxTokens}
+func projectionFor(kind, model string, maxTokens int, system string) harnas.Projection {
+	switch kind {
+	case "openai":
+		return harnas.OpenAIProjection{Model: model, System: system}
+	case "gemini":
+		return harnas.GeminiProjection{Model: model, System: system}
+	default:
+		return harnas.AnthropicProjection{Model: model, MaxTokens: maxTokens, System: system}
+	}
 }
 
 func ingestorFor(kind string) harnas.Ingestor {
