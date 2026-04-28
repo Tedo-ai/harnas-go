@@ -38,6 +38,19 @@ func (p *ScriptedStreamProvider) Call(_ map[string]any, emit func(harnas.EventAr
 	stream := p.streams[0]
 	p.streams = p.streams[1:]
 	for _, event := range stream {
+		if errorSpec, ok := event["error"].(map[string]any); ok {
+			emit(harnas.EventArgs{
+				Type: harnas.EventAssistantTurnFailed,
+				Payload: map[string]any{
+					"turn_id": stringValue(errorSpec["turn_id"]),
+					"error":   stringValue(errorSpec["message"]),
+				},
+			})
+			return ProviderHTTPError{
+				Status: int(floatValue(errorSpec["status"])),
+				Body:   stringValue(errorSpec["body"]),
+			}
+		}
 		emit(harnas.EventArgs{
 			Type:    harnas.EventType(stringValue(event["type"])),
 			Payload: asMap(event["payload"]),

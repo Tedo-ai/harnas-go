@@ -16,6 +16,7 @@ const (
 	EventToolUseArgumentDelta EventType = "tool_use_argument_delta"
 	EventToolUseEnd           EventType = "tool_use_end"
 	EventAssistantTurnDone    EventType = "assistant_turn_completed"
+	EventAssistantTurnFailed  EventType = "assistant_turn_failed"
 )
 
 type Event struct {
