@@ -28,3 +28,7 @@ func (l *Log) LastAssistantMessage() (Event, bool) {
 	}
 	return Event{}, false
 }
+
+func (l *Log) Restore(event Event) {
+	l.events = append(l.events, event)
+}

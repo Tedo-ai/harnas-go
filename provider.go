@@ -16,3 +16,7 @@ type EventArgs struct {
 	Type    EventType
 	Payload map[string]any
 }
+
+type StreamProvider interface {
+	Call(request map[string]any, emit func(EventArgs)) error
+}

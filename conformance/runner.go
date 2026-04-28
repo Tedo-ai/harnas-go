@@ -15,6 +15,7 @@ type Result struct {
 	Passed   bool
 	Actual   []harnas.Event
 	Expected []harnas.Event
+	Diff     string
 }
 
 func Run(fixtureDir string) (Result, error) {
@@ -23,18 +24,24 @@ func Run(fixtureDir string) (Result, error) {
 	var manifest struct {
 		Name     string `json:"name"`
 		Provider struct {
+			Kind      string `json:"kind"`
 			Model     string `json:"model"`
 			MaxTokens int    `json:"max_tokens"`
 		} `json:"provider"`
+		Tools []struct {
+			Name    string `json:"name"`
+			Handler string `json:"handler"`
+		} `json:"tools"`
+		Strategies []struct {
+			Name   string         `json:"name"`
+			Config map[string]any `json:"config"`
+		} `json:"strategies"`
 	}
 	if err := readJSON(filepath.Join(fixtureDir, "manifest.json"), &manifest); err != nil {
 		return Result{}, err
 	}
 
-	var script []map[string]any
-	if err := readJSON(filepath.Join(fixtureDir, "provider-script.json"), &script); err != nil {
-		return Result{}, err
-	}
+	streaming := fileExists(filepath.Join(fixtureDir, "provider-script-stream.json"))
 
 	var inputs []string
 	if err := readJSON(filepath.Join(fixtureDir, "inputs.json"), &inputs); err != nil {
@@ -47,15 +54,40 @@ func Run(fixtureDir string) (Result, error) {
 	}
 
 	session := harnas.CreateSession(map[string]any{"manifest_name": manifest.Name})
+	registry := harnas.NewRegistry()
+	for _, tool := range manifest.Tools {
+		registry.Register(harnas.Tool{Name: tool.Name, Handler: tool.Handler})
+	}
+	for _, strategy := range manifest.Strategies {
+		if strategy.Name == "Compaction::MarkerTail" {
+			harnas.MarkerTail{
+				MaxMessages: int(strategy.Config["max_messages"].(float64)),
+				KeepRecent:  int(strategy.Config["keep_recent"].(float64)),
+			}.Install(session)
+		}
+	}
+
 	loop := harnas.AgentLoop{
-		Session: session,
-		Projection: harnas.AnthropicProjection{
-			Model:     manifest.Provider.Model,
-			MaxTokens: manifest.Provider.MaxTokens,
-		},
-		Provider: NewScriptedProvider(script),
-		Ingestor: harnas.AnthropicIngestor{},
-		MaxTurns: 3,
+		Session:    session,
+		Projection: projectionFor(manifest.Provider.Model, manifest.Provider.MaxTokens),
+		Ingestor:   ingestorFor(manifest.Provider.Kind),
+		MaxTurns:   3,
+	}
+	if registry.Size() > 0 {
+		loop.Runner = &harnas.Runner{Registry: registry}
+	}
+	if streaming {
+		var streams [][]map[string]any
+		if err := readJSON(filepath.Join(fixtureDir, "provider-script-stream.json"), &streams); err != nil {
+			return Result{}, err
+		}
+		loop.StreamProvider = NewScriptedStreamProvider(streams)
+	} else {
+		var script []map[string]any
+		if err := readJSON(filepath.Join(fixtureDir, "provider-script.json"), &script); err != nil {
+			return Result{}, err
+		}
+		loop.Provider = NewScriptedProvider(script)
 	}
 
 	for _, input := range inputs {
@@ -66,12 +98,45 @@ func Run(fixtureDir string) (Result, error) {
 	}
 
 	actual := session.Log.Events()
+	diff := firstDiff(actual, expected)
 	return Result{
 		Fixture:  fixture,
-		Passed:   reflect.DeepEqual(actual, expected),
+		Passed:   diff == "",
 		Actual:   actual,
 		Expected: expected,
+		Diff:     diff,
 	}, nil
+}
+
+func firstDiff(actual, expected []harnas.Event) string {
+	if reflect.DeepEqual(actual, expected) {
+		return ""
+	}
+	limit := len(actual)
+	if len(expected) < limit {
+		limit = len(expected)
+	}
+	for i := range limit {
+		if !reflect.DeepEqual(actual[i], expected[i]) {
+			return fmt.Sprintf("seq %d actual=%#v expected=%#v", i, actual[i], expected[i])
+		}
+	}
+	return fmt.Sprintf("length actual=%d expected=%d", len(actual), len(expected))
+}
+
+func projectionFor(model string, maxTokens int) harnas.Projection {
+	return harnas.AnthropicProjection{Model: model, MaxTokens: maxTokens}
+}
+
+func ingestorFor(kind string) harnas.Ingestor {
+	switch kind {
+	case "openai":
+		return harnas.OpenAIIngestor{}
+	case "gemini":
+		return &harnas.GeminiIngestor{}
+	default:
+		return harnas.AnthropicIngestor{}
+	}
 }
 
 func readJSON(path string, target any) error {
@@ -80,6 +145,11 @@ func readJSON(path string, target any) error {
 		return err
 	}
 	return json.Unmarshal(data, target)
+}
+
+func fileExists(path string) bool {
+	stat, err := os.Stat(path)
+	return err == nil && !stat.IsDir()
 }
 
 func readExpected(path string) ([]harnas.Event, error) {
