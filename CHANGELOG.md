@@ -8,9 +8,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 #### Changed
 
-- Conformance now passes 17/17 fixtures, including streaming,
+- Conformance now passes 18/18 fixtures, including streaming,
   provider retry/fatal errors, tool failure, permission denial, and
   large/unicode tool arguments.
+- Added the conformance-facing `Compaction::ToolOutputCap` strategy.
 - Buffered conformance scripts can now assert the projected provider
   request before returning a response.
 - Added OpenAI and Gemini fixture ingestors, session-scoped hooks,

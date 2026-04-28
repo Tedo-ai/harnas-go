@@ -66,6 +66,13 @@ func Run(fixtureDir string) (Result, error) {
 				KeepRecent:  int(strategy.Config["keep_recent"].(float64)),
 			}.Install(session)
 		}
+		if strategy.Name == "Compaction::ToolOutputCap" {
+			harnas.ToolOutputCap{
+				MaxBytes:      int(strategy.Config["max_bytes"].(float64)),
+				PrefixBytes:   int(strategy.Config["prefix_bytes"].(float64)),
+				SummaryFormat: optionalString(strategy.Config["summary_format"]),
+			}.Install(session)
+		}
 		if strategy.Name == "Permission::DenyByName" {
 			harnas.DenyByName{
 				Names:        stringSlice(strategy.Config["names"]),
