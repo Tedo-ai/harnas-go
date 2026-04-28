@@ -118,6 +118,17 @@ func Run(fixtureDir string) (Result, error) {
 				session.Log.Append(harnas.EventRevert, map[string]any{"revokes": revokes})
 				continue
 			}
+			if forkSpec, ok := action["fork"]; ok {
+				atSeq := int(floatValue(asMap(forkSpec)["at_seq"]))
+				parent := session
+				forked := parent.Fork(atSeq)
+				if err := verifyFork(parent, forked, atSeq); err != nil {
+					return Result{}, err
+				}
+				session = forked
+				loop.Session = forked
+				continue
+			}
 			input = action["user"]
 		}
 		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
@@ -135,6 +146,26 @@ func Run(fixtureDir string) (Result, error) {
 		Expected: expected,
 		Diff:     diff,
 	}, nil
+}
+
+func verifyFork(parent, forked *harnas.Session, atSeq int) error {
+	parentEvents := parent.Log.Events()
+	forkedEvents := forked.Log.Events()
+	if len(forkedEvents) != atSeq+1 {
+		return fmt.Errorf("fork prefix length mismatch")
+	}
+	for i := 0; i <= atSeq; i++ {
+		if !reflect.DeepEqual(forkedEvents[i], parentEvents[i]) {
+			return fmt.Errorf("fork prefix mismatch at seq %d", i)
+		}
+	}
+	if forked.Metadata["forked_from"] != parent.ID {
+		return fmt.Errorf("forked_from mismatch")
+	}
+	if int(floatValue(forked.Metadata["forked_at_seq"])) != atSeq {
+		return fmt.Errorf("forked_at_seq mismatch")
+	}
+	return nil
 }
 
 func firstDiff(actual, expected []harnas.Event) string {

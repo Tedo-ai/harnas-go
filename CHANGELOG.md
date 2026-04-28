@@ -8,9 +8,11 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 #### Changed
 
-- Conformance now passes 19/19 fixtures, including streaming,
+- Conformance now passes 20/20 fixtures, including streaming,
   provider retry/fatal errors, tool failure, permission denial, and
   large/unicode tool arguments.
+- Added `Session.Fork` and conformance fork actions with prefix and
+  metadata verification.
 - Added mutation application for projections and conformance input
   actions for explicit `compact` / `revert` chains.
 - Added the conformance-facing `Compaction::ToolOutputCap` strategy.
