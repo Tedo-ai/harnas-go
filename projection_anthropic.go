@@ -8,10 +8,10 @@ type AnthropicProjection struct {
 
 func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
 	messages := []map[string]any{}
-	for _, event := range log.Events() {
+	for _, event := range ApplyMutations(log) {
 		text, _ := event.Payload["text"].(string)
 		switch event.Type {
-		case EventUserMessage:
+		case EventUserMessage, EventSummary:
 			messages = append(messages, map[string]any{"role": "user", "content": text})
 		case EventAssistantMessage:
 			if text != "" {
@@ -40,10 +40,10 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 	if p.System != "" {
 		messages = append(messages, map[string]any{"role": "system", "content": p.System})
 	}
-	for _, event := range log.Events() {
+	for _, event := range ApplyMutations(log) {
 		text, _ := event.Payload["text"].(string)
 		switch event.Type {
-		case EventUserMessage:
+		case EventUserMessage, EventSummary:
 			messages = append(messages, map[string]any{"role": "user", "content": text})
 		case EventAssistantMessage:
 			messages = append(messages, map[string]any{"role": "assistant", "content": text})
@@ -62,10 +62,10 @@ type GeminiProjection struct {
 
 func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
 	contents := []map[string]any{}
-	for _, event := range log.Events() {
+	for _, event := range ApplyMutations(log) {
 		text, _ := event.Payload["text"].(string)
 		switch event.Type {
-		case EventUserMessage:
+		case EventUserMessage, EventSummary:
 			contents = append(contents, map[string]any{
 				"role":  "user",
 				"parts": []map[string]any{{"text": text}},

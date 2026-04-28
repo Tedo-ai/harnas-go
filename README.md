@@ -9,7 +9,7 @@ toward parity with the Ruby reference.
 
 ## Status
 
-- Agent conformance: 18/18 fixtures passing
+- Agent conformance: 19/19 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks, MarkerTail and ToolOutputCap compaction,

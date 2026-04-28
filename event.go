@@ -8,6 +8,8 @@ const (
 	EventToolUse              EventType = "tool_use"
 	EventToolResult           EventType = "tool_result"
 	EventCompact              EventType = "compact"
+	EventRevert               EventType = "revert"
+	EventSummary              EventType = "summary"
 	EventAnnotation           EventType = "annotation"
 	EventProviderError        EventType = "provider_error"
 	EventAssistantTurnStarted EventType = "assistant_turn_started"

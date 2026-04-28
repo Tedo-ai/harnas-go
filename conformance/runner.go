@@ -44,7 +44,7 @@ func Run(fixtureDir string) (Result, error) {
 
 	streaming := fileExists(filepath.Join(fixtureDir, "provider-script-stream.json"))
 
-	var inputs []string
+	var inputs []any
 	if err := readJSON(filepath.Join(fixtureDir, "inputs.json"), &inputs); err != nil {
 		return Result{}, err
 	}
@@ -105,7 +105,22 @@ func Run(fixtureDir string) (Result, error) {
 	}
 
 	for _, input := range inputs {
-		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": input})
+		if action, ok := input.(map[string]any); ok {
+			if compact, ok := action["compact"]; ok {
+				spec := asMap(compact)
+				session.Log.Append(harnas.EventCompact, map[string]any{
+					"replaces": spec["replaces"],
+					"summary":  spec["summary"],
+				})
+				continue
+			}
+			if revokes, ok := action["revert"]; ok {
+				session.Log.Append(harnas.EventRevert, map[string]any{"revokes": revokes})
+				continue
+			}
+			input = action["user"]
+		}
+		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
 		if _, err := loop.Run(); err != nil {
 			return Result{}, err
 		}
