@@ -13,6 +13,7 @@ toward parity with the Ruby reference.
 
 - Agent conformance: 20/20 fixtures passing
 - Buffered and streaming AgentLoop paths
+- Public Agent Manifest loader for v0.1 manifests
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks, MarkerTail and ToolOutputCap compaction,
   DenyByName permission

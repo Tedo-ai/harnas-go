@@ -35,3 +35,14 @@ func stringValue(value any) string {
 	}
 	return ""
 }
+
+func stringSlice(value any) []string {
+	items := asSlice(value)
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if text, ok := item.(string); ok {
+			out = append(out, text)
+		}
+	}
+	return out
+}

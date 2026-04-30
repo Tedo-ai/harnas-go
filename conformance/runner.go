@@ -56,31 +56,11 @@ func Run(fixtureDir string) (Result, error) {
 	}, nil
 }
 
-type Manifest struct {
-	Name     string `json:"name"`
-	System   string `json:"system"`
-	Provider struct {
-		Kind      string `json:"kind"`
-		Model     string `json:"model"`
-		MaxTokens int    `json:"max_tokens"`
-	} `json:"provider"`
-	Tools []struct {
-		Name    string `json:"name"`
-		Handler string `json:"handler"`
-	} `json:"tools"`
-	Strategies []struct {
-		Name   string         `json:"name"`
-		Config map[string]any `json:"config"`
-	} `json:"strategies"`
+func LoadManifest(fixtureDir string) (harnas.Manifest, error) {
+	return harnas.ReadManifest(filepath.Join(fixtureDir, "manifest.json"))
 }
 
-func LoadManifest(fixtureDir string) (Manifest, error) {
-	var manifest Manifest
-	err := readJSON(filepath.Join(fixtureDir, "manifest.json"), &manifest)
-	return manifest, err
-}
-
-func RunSession(manifest Manifest, scriptPath string, inputs []any, session *harnas.Session) (*harnas.Session, error) {
+func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session) (*harnas.Session, error) {
 	streaming := filepath.Base(scriptPath) == "provider-script-stream.json" || filepath.Base(scriptPath) == "phase-1-provider-script-stream.json" || filepath.Base(scriptPath) == "phase-2-provider-script-stream.json"
 
 	if session == nil {
@@ -88,34 +68,25 @@ func RunSession(manifest Manifest, scriptPath string, inputs []any, session *har
 	}
 	registry := harnas.NewRegistry()
 	for _, tool := range manifest.Tools {
-		registry.Register(harnas.Tool{Name: tool.Name, Handler: tool.Handler})
+		registry.Register(harnas.Tool{
+			Name:        tool.Name,
+			Handler:     tool.Handler,
+			Description: tool.Description,
+			InputSchema: tool.InputSchema,
+		})
 	}
-	for _, strategy := range manifest.Strategies {
-		if strategy.Name == "Compaction::MarkerTail" {
-			harnas.MarkerTail{
-				MaxMessages: int(strategy.Config["max_messages"].(float64)),
-				KeepRecent:  int(strategy.Config["keep_recent"].(float64)),
-			}.Install(session)
-		}
-		if strategy.Name == "Compaction::ToolOutputCap" {
-			harnas.ToolOutputCap{
-				MaxBytes:      int(strategy.Config["max_bytes"].(float64)),
-				PrefixBytes:   int(strategy.Config["prefix_bytes"].(float64)),
-				SummaryFormat: optionalString(strategy.Config["summary_format"]),
-			}.Install(session)
-		}
-		if strategy.Name == "Permission::DenyByName" {
-			harnas.DenyByName{
-				Names:        stringSlice(strategy.Config["names"]),
-				ReasonFormat: optionalString(strategy.Config["reason_format"]),
-			}.Install(session)
-		}
+	strategies, err := harnas.BuildStrategies(manifest.Strategies)
+	if err != nil {
+		return nil, err
+	}
+	for _, strategy := range strategies {
+		strategy.Install(session)
 	}
 
 	loop := harnas.AgentLoop{
 		Session:    session,
-		Projection: projectionFor(manifest.Provider.Kind, manifest.Provider.Model, manifest.Provider.MaxTokens, manifest.System),
-		Ingestor:   ingestorFor(manifest.Provider.Kind),
+		Projection: harnas.ProjectionFor(manifest.Provider, manifest.System),
+		Ingestor:   harnas.IngestorFor(manifest.Provider.Kind),
 		MaxTurns:   3,
 	}
 	if registry.Size() > 0 {
@@ -223,47 +194,6 @@ func eventsEqual(left, right harnas.Event) bool {
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
-}
-
-func projectionFor(kind, model string, maxTokens int, system string) harnas.Projection {
-	switch kind {
-	case "openai":
-		return harnas.OpenAIProjection{Model: model, System: system}
-	case "gemini":
-		return harnas.GeminiProjection{Model: model, System: system}
-	default:
-		return harnas.AnthropicProjection{Model: model, MaxTokens: maxTokens, System: system}
-	}
-}
-
-func ingestorFor(kind string) harnas.Ingestor {
-	switch kind {
-	case "openai":
-		return harnas.OpenAIIngestor{}
-	case "gemini":
-		return &harnas.GeminiIngestor{}
-	default:
-		return harnas.AnthropicIngestor{}
-	}
-}
-
-func stringSlice(value any) []string {
-	items, ok := value.([]any)
-	if !ok {
-		return nil
-	}
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		if text, ok := item.(string); ok {
-			out = append(out, text)
-		}
-	}
-	return out
-}
-
-func optionalString(value any) string {
-	text, _ := value.(string)
-	return text
 }
 
 func readJSON(path string, target any) error {

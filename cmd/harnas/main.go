@@ -298,7 +298,7 @@ func runProject(args []string, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	manifest, err := loadManifest(*manifestPath)
+	manifest, err := harnas.ReadManifest(*manifestPath)
 	if err != nil {
 		return err
 	}
@@ -308,45 +308,12 @@ func runProject(args []string, stdout io.Writer) error {
 	if *model != "" {
 		manifest.Provider.Model = *model
 	}
-	projection := projectionFor(manifest)
+	projection := harnas.ProjectionFor(manifest.Provider, manifest.System)
 	request, err := projection.Project(sliceLog(session.Log, *fromSeq, *toSeq))
 	if err != nil {
 		return err
 	}
 	return writePrettyJSON(stdout, request)
-}
-
-type manifest struct {
-	System   string `json:"system"`
-	Provider struct {
-		Kind      string `json:"kind"`
-		Model     string `json:"model"`
-		MaxTokens int    `json:"max_tokens"`
-	} `json:"provider"`
-}
-
-func loadManifest(path string) (manifest, error) {
-	var out manifest
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return out, err
-	}
-	return out, json.Unmarshal(data, &out)
-}
-
-func projectionFor(manifest manifest) harnas.Projection {
-	switch manifest.Provider.Kind {
-	case "openai":
-		return harnas.OpenAIProjection{Model: manifest.Provider.Model, System: manifest.System}
-	case "gemini":
-		return harnas.GeminiProjection{Model: manifest.Provider.Model, System: manifest.System}
-	default:
-		return harnas.AnthropicProjection{
-			Model:     manifest.Provider.Model,
-			MaxTokens: manifest.Provider.MaxTokens,
-			System:    manifest.System,
-		}
-	}
 }
 
 func sliceLog(log *harnas.Log, fromSeq, toSeq int) *harnas.Log {
