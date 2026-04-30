@@ -13,6 +13,9 @@ All notable changes to the Go implementation of Harnas are recorded here.
 - Added a public Agent Manifest loader that validates v0.1 manifests,
   builds the projection/ingestor/registry/strategy bundle, and exposes
   Session-scoped strategy installation.
+- Added buffered HTTP providers for Anthropic, OpenAI, and Gemini,
+  including provider-specific auth headers, Gemini model-in-URL
+  request handling, HTTP status errors, and invalid-JSON errors.
 - Log Events now carry an internal `ID` so Session JSONL save/load can
   preserve Event identity instead of synthesizing ids only while
   writing files.

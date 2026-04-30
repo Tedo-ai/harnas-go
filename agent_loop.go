@@ -113,7 +113,7 @@ func retryableProviderError(err error, attempt int) bool {
 
 func (l AgentLoop) appendProviderError(err error, attempt int, terminal bool) {
 	l.Session.Log.Append(EventProviderError, map[string]any{
-		"provider":    "unknown",
+		"provider":    providerName(l.Provider),
 		"status":      providerStatusPayload(err),
 		"error_class": providerErrorClass(err),
 		"message":     err.Error(),

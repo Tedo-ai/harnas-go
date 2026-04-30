@@ -27,6 +27,7 @@ func TestLoadManifestBuildsRuntimeBundle(t *testing.T) {
 	}`)
 
 	loaded, err := LoadManifest(path, ManifestOptions{
+		APIKeys: map[string]string{"anthropic": "sk-test"},
 		ToolHandlers: map[string]ToolHandler{
 			"test.echo": func(args map[string]any) (string, error) {
 				return stringValue(args["text"]), nil

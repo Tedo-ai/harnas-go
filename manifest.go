@@ -49,6 +49,7 @@ type ToolHandler func(map[string]any) (string, error)
 type ManifestOptions struct {
 	ToolHandlers map[string]ToolHandler
 	Providers    map[string]Provider
+	APIKeys      map[string]string
 }
 
 type LoadedManifest struct {
@@ -98,11 +99,15 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
+	provider, err := providerFor(manifest.Provider.Kind, options)
+	if err != nil {
+		return nil, err
+	}
 	return &LoadedManifest{
 		Name:       manifest.Name,
 		Session:    CreateSession(map[string]any{"manifest_name": manifest.Name}),
 		Projection: ProjectionFor(manifest.Provider, manifest.System),
-		Provider:   providerFor(manifest.Provider.Kind, options.Providers),
+		Provider:   provider,
 		Ingestor:   IngestorFor(manifest.Provider.Kind),
 		Registry:   registry,
 		Strategies: strategies,
@@ -268,11 +273,47 @@ func IngestorFor(kind string) Ingestor {
 	}
 }
 
-func providerFor(kind string, providers map[string]Provider) Provider {
-	if providers == nil {
-		return nil
+func providerFor(kind string, options ManifestOptions) (Provider, error) {
+	if options.Providers != nil {
+		if provider := options.Providers[kind]; provider != nil {
+			return provider, nil
+		}
 	}
-	return providers[kind]
+	if kind == "mock" {
+		return nil, nil
+	}
+	key := apiKeyFor(kind, options.APIKeys)
+	if key == "" {
+		return nil, manifestError("api_keys[%q] is required for provider %s", kind, kind)
+	}
+	switch kind {
+	case "anthropic":
+		return NewAnthropicProvider(key), nil
+	case "openai":
+		return NewOpenAIProvider(key), nil
+	case "gemini":
+		return NewGeminiProvider(key), nil
+	default:
+		return nil, manifestError("unknown provider kind: %q", kind)
+	}
+}
+
+func apiKeyFor(kind string, explicit map[string]string) string {
+	if explicit != nil {
+		if key := explicit[kind]; key != "" {
+			return key
+		}
+	}
+	switch kind {
+	case "anthropic":
+		return os.Getenv("ANTHROPIC_API_KEY")
+	case "openai":
+		return os.Getenv("OPENAI_API_KEY")
+	case "gemini":
+		return os.Getenv("GEMINI_API_KEY")
+	default:
+		return ""
+	}
 }
 
 func knownProvider(kind string) bool {
