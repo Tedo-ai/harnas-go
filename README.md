@@ -16,6 +16,8 @@ toward parity with the Ruby reference.
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
+- Built-in tools: read_file, write_file, edit_file, list_dir, glob,
+  grep, run_shell, fetch_url
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks, MarkerTail and ToolOutputCap compaction,
   DenyByName permission
