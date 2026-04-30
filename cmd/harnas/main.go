@@ -488,12 +488,24 @@ func runProject(args []string, stdout io.Writer) error {
 	if *model != "" {
 		manifest.Provider.Model = *model
 	}
-	projection := harnas.ProjectionFor(manifest.Provider, manifest.System)
+	registry, err := projectRegistry(manifest.Tools)
+	if err != nil {
+		return err
+	}
+	projection := harnas.ProjectionForWithRegistry(manifest.Provider, manifest.System, registry)
 	request, err := projection.Project(sliceLog(session.Log, *fromSeq, *toSeq))
 	if err != nil {
 		return err
 	}
 	return writePrettyJSON(stdout, request)
+}
+
+func projectRegistry(tools []harnas.ToolSpec) (*harnas.Registry, error) {
+	handlers := map[string]harnas.ToolHandler{}
+	for _, tool := range tools {
+		handlers[tool.Handler] = func(map[string]any) (string, error) { return "", nil }
+	}
+	return harnas.BuildRegistry(tools, handlers)
 }
 
 func sliceLog(log *harnas.Log, fromSeq, toSeq int) *harnas.Log {

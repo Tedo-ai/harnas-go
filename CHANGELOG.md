@@ -26,6 +26,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
   handlers.
 - Added `Compaction::TokenMarkerTail` and `Compaction::SummaryTail`,
   including manifest wiring for provider-backed summaries.
+- Projections now include manifest tool descriptors in provider
+  requests for Anthropic, OpenAI, and Gemini.
 - Added buffered HTTP providers for Anthropic, OpenAI, and Gemini,
   including provider-specific auth headers, Gemini model-in-URL
   request handling, HTTP status errors, and invalid-JSON errors.

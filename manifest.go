@@ -97,7 +97,7 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
-	projection := ProjectionFor(manifest.Provider, manifest.System)
+	projection := ProjectionForWithRegistry(manifest.Provider, manifest.System, registry)
 	provider, err := providerFor(manifest.Provider.Kind, options)
 	if err != nil {
 		return nil, err
@@ -296,16 +296,21 @@ func BuildStrategiesWithRuntime(
 }
 
 func ProjectionFor(provider ProviderSpec, system string) Projection {
+	return ProjectionForWithRegistry(provider, system, nil)
+}
+
+func ProjectionForWithRegistry(provider ProviderSpec, system string, registry *Registry) Projection {
 	switch provider.Kind {
 	case "openai":
-		return OpenAIProjection{Model: provider.Model, System: system}
+		return OpenAIProjection{Model: provider.Model, System: system, Registry: registry}
 	case "gemini":
-		return GeminiProjection{Model: provider.Model, System: system}
+		return GeminiProjection{Model: provider.Model, System: system, Registry: registry}
 	default:
 		return AnthropicProjection{
 			Model:     provider.Model,
 			MaxTokens: provider.MaxTokens,
 			System:    system,
+			Registry:  registry,
 		}
 	}
 }

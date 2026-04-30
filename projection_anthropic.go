@@ -4,6 +4,7 @@ type AnthropicProjection struct {
 	Model     string
 	MaxTokens int
 	System    string
+	Registry  *Registry
 }
 
 func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
@@ -27,12 +28,16 @@ func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
 	if p.System != "" {
 		request["system"] = p.System
 	}
+	if p.Registry != nil && p.Registry.Size() > 0 {
+		request["tools"] = anthropicToolDescriptors(p.Registry)
+	}
 	return request, nil
 }
 
 type OpenAIProjection struct {
-	Model  string
-	System string
+	Model    string
+	System   string
+	Registry *Registry
 }
 
 func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
@@ -49,15 +54,20 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 			messages = append(messages, map[string]any{"role": "assistant", "content": text})
 		}
 	}
-	return map[string]any{
+	request := map[string]any{
 		"model":    p.Model,
 		"messages": messages,
-	}, nil
+	}
+	if p.Registry != nil && p.Registry.Size() > 0 {
+		request["tools"] = openAIToolDescriptors(p.Registry)
+	}
+	return request, nil
 }
 
 type GeminiProjection struct {
-	Model  string
-	System string
+	Model    string
+	System   string
+	Registry *Registry
 }
 
 func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
@@ -89,5 +99,47 @@ func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
 			"parts": []map[string]any{{"text": p.System}},
 		}
 	}
+	if p.Registry != nil && p.Registry.Size() > 0 {
+		request["tools"] = geminiToolDescriptors(p.Registry)
+	}
 	return request, nil
+}
+
+func anthropicToolDescriptors(registry *Registry) []map[string]any {
+	tools := []map[string]any{}
+	for _, tool := range registry.Tools() {
+		tools = append(tools, map[string]any{
+			"name":         tool.Name,
+			"description":  tool.Description,
+			"input_schema": tool.InputSchema,
+		})
+	}
+	return tools
+}
+
+func openAIToolDescriptors(registry *Registry) []map[string]any {
+	tools := []map[string]any{}
+	for _, tool := range registry.Tools() {
+		tools = append(tools, map[string]any{
+			"type": "function",
+			"function": map[string]any{
+				"name":        tool.Name,
+				"description": tool.Description,
+				"parameters":  tool.InputSchema,
+			},
+		})
+	}
+	return tools
+}
+
+func geminiToolDescriptors(registry *Registry) []map[string]any {
+	declarations := []map[string]any{}
+	for _, tool := range registry.Tools() {
+		declarations = append(declarations, map[string]any{
+			"name":        tool.Name,
+			"description": tool.Description,
+			"parameters":  tool.InputSchema,
+		})
+	}
+	return []map[string]any{{"functionDeclarations": declarations}}
 }

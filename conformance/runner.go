@@ -86,7 +86,7 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 
 	loop := harnas.AgentLoop{
 		Session:    session,
-		Projection: harnas.ProjectionFor(manifest.Provider, manifest.System),
+		Projection: harnas.ProjectionForWithRegistry(manifest.Provider, manifest.System, registry),
 		Ingestor:   harnas.IngestorFor(manifest.Provider.Kind),
 		RetryPolicy: &harnas.RetryPolicy{
 			MaxAttempts:   3,

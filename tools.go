@@ -3,6 +3,7 @@ package harnas
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 )
 
 type Tool struct {
@@ -46,6 +47,7 @@ func (r *Registry) Tools() []Tool {
 	for _, tool := range r.tools {
 		tools = append(tools, tool)
 	}
+	sort.Slice(tools, func(i, j int) bool { return tools[i].Name < tools[j].Name })
 	return tools
 }
 
