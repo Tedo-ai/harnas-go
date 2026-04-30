@@ -45,11 +45,13 @@ type StrategySpec struct {
 }
 
 type ToolHandler func(map[string]any) (string, error)
+type ApprovalHandler func(Event) bool
 
 type ManifestOptions struct {
-	ToolHandlers map[string]ToolHandler
-	Providers    map[string]Provider
-	APIKeys      map[string]string
+	ToolHandlers     map[string]ToolHandler
+	StrategyHandlers map[string]ApprovalHandler
+	Providers        map[string]Provider
+	APIKeys          map[string]string
 }
 
 type LoadedManifest struct {
@@ -95,7 +97,7 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
-	strategies, err := BuildStrategies(manifest.Strategies)
+	strategies, err := BuildStrategies(manifest.Strategies, options.StrategyHandlers)
 	if err != nil {
 		return nil, err
 	}
@@ -220,7 +222,7 @@ func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry
 	return registry, nil
 }
 
-func BuildStrategies(specs []StrategySpec) ([]StrategyInstallation, error) {
+func BuildStrategies(specs []StrategySpec, handlers map[string]ApprovalHandler) ([]StrategyInstallation, error) {
 	strategies := make([]StrategyInstallation, 0, len(specs))
 	for _, spec := range specs {
 		switch spec.Name {
@@ -239,6 +241,18 @@ func BuildStrategies(specs []StrategySpec) ([]StrategyInstallation, error) {
 			strategies = append(strategies, DenyByName{
 				Names:        stringSlice(spec.Config["names"]),
 				ReasonFormat: stringValue(spec.Config["reason_format"]),
+			})
+		case "Permission::AlwaysAllow":
+			strategies = append(strategies, AlwaysAllow{})
+		case "Permission::HumanApproval":
+			name := stringValue(spec.Config["prompt"])
+			handler := handlers[name]
+			if handler == nil {
+				return nil, manifestError("strategy handler %q not in strategy_handlers", name)
+			}
+			strategies = append(strategies, HumanApproval{
+				Prompt:       handler,
+				DenialReason: stringValue(spec.Config["denial_reason"]),
 			})
 		default:
 			return nil, manifestError("unknown canonical strategy: %q", spec.Name)
@@ -327,7 +341,8 @@ func knownProvider(kind string) bool {
 
 func knownStrategy(name string) bool {
 	switch name {
-	case "Compaction::MarkerTail", "Compaction::ToolOutputCap", "Permission::DenyByName":
+	case "Compaction::MarkerTail", "Compaction::ToolOutputCap",
+		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval":
 		return true
 	default:
 		return false

@@ -191,3 +191,30 @@ func containsString(values []string, target string) bool {
 func replaceName(format, name string) string {
 	return strings.ReplaceAll(format, "$NAME", fmt.Sprintf("%q", name))
 }
+
+type AlwaysAllow struct{}
+
+func (a AlwaysAllow) Install(session *Session) {
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		return map[string]any{"allow": true}
+	})
+}
+
+type HumanApproval struct {
+	Prompt       func(Event) bool
+	DenialReason string
+}
+
+func (h HumanApproval) Install(session *Session) {
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		if h.Prompt != nil && h.Prompt(toolUse) {
+			return map[string]any{"allow": true}
+		}
+		reason := h.DenialReason
+		if reason == "" {
+			reason = "human declined"
+		}
+		return map[string]any{"allow": false, "reason": reason}
+	})
+}

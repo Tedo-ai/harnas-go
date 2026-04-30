@@ -76,7 +76,7 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 			InputSchema: tool.InputSchema,
 		})
 	}
-	strategies, err := harnas.BuildStrategies(manifest.Strategies)
+	strategies, err := harnas.BuildStrategies(manifest.Strategies, nil)
 	if err != nil {
 		return nil, err
 	}

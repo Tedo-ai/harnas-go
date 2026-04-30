@@ -20,7 +20,7 @@ toward parity with the Ruby reference.
   grep, run_shell, fetch_url
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks, MarkerTail and ToolOutputCap compaction,
-  DenyByName permission
+  AlwaysAllow, DenyByName, and HumanApproval permission
 - Scripted provider errors and provider_error Log events
 
 ## Run
