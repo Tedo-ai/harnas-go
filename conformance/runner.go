@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"time"
 
 	harnas "github.com/Tedo-ai/harnas-go"
 )
@@ -87,7 +88,12 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 		Session:    session,
 		Projection: harnas.ProjectionFor(manifest.Provider, manifest.System),
 		Ingestor:   harnas.IngestorFor(manifest.Provider.Kind),
-		MaxTurns:   3,
+		RetryPolicy: &harnas.RetryPolicy{
+			MaxAttempts:   3,
+			RetryableHTTP: map[int]bool{408: true, 429: true, 500: true, 502: true, 503: true, 504: true},
+			Backoff:       func(int) time.Duration { return 0 },
+		},
+		MaxTurns: 3,
 	}
 	if registry.Size() > 0 {
 		loop.Runner = &harnas.Runner{Registry: registry}

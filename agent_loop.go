@@ -1,6 +1,11 @@
 package harnas
 
-import "fmt"
+import (
+	"fmt"
+	"time"
+)
+
+var sleep = time.Sleep
 
 type AgentLoop struct {
 	Session        *Session
@@ -9,6 +14,7 @@ type AgentLoop struct {
 	Ingestor       Ingestor
 	StreamProvider StreamProvider
 	Runner         *Runner
+	RetryPolicy    *RetryPolicy
 	MaxTurns       int
 }
 
@@ -55,12 +61,20 @@ func (l AgentLoop) runTurn() (string, error) {
 
 func (l AgentLoop) callProviderWithRetry(request map[string]any) bool {
 	attempt := 1
+	policy := DefaultRetryPolicy()
+	if l.RetryPolicy != nil {
+		policy = *l.RetryPolicy
+	}
 	for {
 		if err := l.runOneProviderAttempt(request); err != nil {
-			terminal := !retryableProviderError(err, attempt)
-			l.appendProviderError(err, attempt, terminal)
-			if terminal {
+			decision := policy.Decide(err, attempt)
+			if !decision.Retry {
+				l.appendProviderError(err, attempt, true)
 				return false
+			}
+			l.appendProviderError(err, attempt, false)
+			if decision.Delay > 0 {
+				sleep(decision.Delay)
 			}
 			attempt++
 			continue
@@ -96,19 +110,6 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 type statusError interface {
 	error
 	HTTPStatus() int
-}
-
-func retryableProviderError(err error, attempt int) bool {
-	if attempt >= 3 {
-		return false
-	}
-	status := providerStatus(err)
-	switch status {
-	case 408, 429, 500, 502, 503, 504:
-		return true
-	default:
-		return false
-	}
 }
 
 func (l AgentLoop) appendProviderError(err error, attempt int, terminal bool) {
