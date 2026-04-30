@@ -24,7 +24,24 @@ toward parity with the Ruby reference.
 go test ./...
 bin/conformance
 bin/conformance-roundtrip --help
+bin/harnas inspect session.jsonl
 ```
 
 `bin/conformance` resolves fixtures from a sibling checkout of
 `Tedo-ai/harnas`, or from `HARNAS_SPEC` when set.
+
+## Operator CLI
+
+The Go port ships the persisted-Session operator commands shared with
+the Ruby and Python CLIs:
+
+```sh
+bin/harnas inspect session.jsonl [--json]
+bin/harnas fork session.jsonl --at-seq N --out forked.jsonl
+bin/harnas diff a.jsonl b.jsonl
+bin/harnas project session.jsonl --manifest manifest.json [--from-seq N] [--to-seq M]
+```
+
+`project` renders the provider request body from a saved Log slice
+without making a provider call. It supports the conformance-facing
+Anthropic, OpenAI, and Gemini projections.

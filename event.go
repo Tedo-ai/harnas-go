@@ -22,6 +22,7 @@ const (
 )
 
 type Event struct {
+	ID      string         `json:"-"`
 	Seq     int            `json:"seq"`
 	Type    EventType      `json:"type"`
 	Payload map[string]any `json:"payload"`

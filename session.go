@@ -67,9 +67,13 @@ func (s *Session) Save(path string) error {
 		return err
 	}
 	for _, event := range s.Log.Events() {
+		id := event.ID
+		if id == "" {
+			id = eventID(event.Seq, event.Payload)
+		}
 		if err := encoder.Encode(map[string]any{
 			"seq":     event.Seq,
-			"id":      fmt.Sprintf("evt_%d_go", event.Seq),
+			"id":      id,
 			"type":    event.Type,
 			"payload": event.Payload,
 		}); err != nil {
@@ -104,13 +108,14 @@ func LoadSession(path string) (*Session, error) {
 	for _, line := range lines[1:] {
 		var row struct {
 			Seq     int            `json:"seq"`
+			ID      string         `json:"id"`
 			Type    EventType      `json:"type"`
 			Payload map[string]any `json:"payload"`
 		}
 		if err := json.Unmarshal(line, &row); err != nil {
 			return nil, err
 		}
-		log.Restore(Event{Seq: row.Seq, Type: row.Type, Payload: row.Payload})
+		log.Restore(Event{ID: row.ID, Seq: row.Seq, Type: row.Type, Payload: row.Payload})
 	}
 	return NewSession(header.ID, log, header.Metadata), nil
 }

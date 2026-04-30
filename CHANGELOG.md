@@ -4,6 +4,16 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+### Reference implementation (Go)
+
+#### Added
+
+- Added a small `harnas` CLI with `inspect`, `fork`, `diff`, and
+  `project` commands for persisted Session JSONL debugging.
+- Log Events now carry an internal `ID` so Session JSONL save/load can
+  preserve Event identity instead of synthesizing ids only while
+  writing files.
+
 ## [0.4.0] — 2026-04-29
 
 ### Reference implementation (Go)

@@ -8,6 +8,9 @@ func TestLogAppendAssignsSeq(t *testing.T) {
 	if event.Seq != 0 {
 		t.Fatalf("expected seq 0, got %d", event.Seq)
 	}
+	if event.ID == "" {
+		t.Fatalf("expected event id")
+	}
 	if event.Type != EventUserMessage {
 		t.Fatalf("expected user_message, got %s", event.Type)
 	}

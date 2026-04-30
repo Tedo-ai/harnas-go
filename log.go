@@ -1,5 +1,11 @@
 package harnas
 
+import (
+	"crypto/sha256"
+	"encoding/json"
+	"fmt"
+)
+
 type Log struct {
 	events []Event
 }
@@ -9,7 +15,8 @@ func NewLog() *Log {
 }
 
 func (l *Log) Append(eventType EventType, payload map[string]any) Event {
-	event := Event{Seq: len(l.events), Type: eventType, Payload: payload}
+	seq := len(l.events)
+	event := Event{ID: eventID(seq, payload), Seq: seq, Type: eventType, Payload: payload}
 	l.events = append(l.events, event)
 	return event
 }
@@ -31,4 +38,13 @@ func (l *Log) LastAssistantMessage() (Event, bool) {
 
 func (l *Log) Restore(event Event) {
 	l.events = append(l.events, event)
+}
+
+func eventID(seq int, payload map[string]any) string {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		data = []byte(fmt.Sprintf("%v", payload))
+	}
+	digest := sha256.Sum256(data)
+	return fmt.Sprintf("evt_%d_%x", seq, digest[:6])
 }
