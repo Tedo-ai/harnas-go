@@ -97,20 +97,28 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
-	strategies, err := BuildStrategies(manifest.Strategies, options.StrategyHandlers)
+	projection := ProjectionFor(manifest.Provider, manifest.System)
+	provider, err := providerFor(manifest.Provider.Kind, options)
 	if err != nil {
 		return nil, err
 	}
-	provider, err := providerFor(manifest.Provider.Kind, options)
+	ingestor := IngestorFor(manifest.Provider.Kind)
+	strategies, err := BuildStrategiesWithRuntime(
+		manifest.Strategies,
+		options.StrategyHandlers,
+		projection,
+		provider,
+		ingestor,
+	)
 	if err != nil {
 		return nil, err
 	}
 	return &LoadedManifest{
 		Name:       manifest.Name,
 		Session:    CreateSession(map[string]any{"manifest_name": manifest.Name}),
-		Projection: ProjectionFor(manifest.Provider, manifest.System),
+		Projection: projection,
 		Provider:   provider,
-		Ingestor:   IngestorFor(manifest.Provider.Kind),
+		Ingestor:   ingestor,
 		Registry:   registry,
 		Strategies: strategies,
 	}, nil
@@ -223,6 +231,16 @@ func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry
 }
 
 func BuildStrategies(specs []StrategySpec, handlers map[string]ApprovalHandler) ([]StrategyInstallation, error) {
+	return BuildStrategiesWithRuntime(specs, handlers, nil, nil, nil)
+}
+
+func BuildStrategiesWithRuntime(
+	specs []StrategySpec,
+	handlers map[string]ApprovalHandler,
+	projection Projection,
+	provider Provider,
+	ingestor Ingestor,
+) ([]StrategyInstallation, error) {
 	strategies := make([]StrategyInstallation, 0, len(specs))
 	for _, spec := range specs {
 		switch spec.Name {
@@ -236,6 +254,22 @@ func BuildStrategies(specs []StrategySpec, handlers map[string]ApprovalHandler) 
 				MaxBytes:      intValue(spec.Config["max_bytes"]),
 				PrefixBytes:   intValue(spec.Config["prefix_bytes"]),
 				SummaryFormat: stringValue(spec.Config["summary_format"]),
+			})
+		case "Compaction::TokenMarkerTail":
+			strategies = append(strategies, TokenMarkerTail{
+				MaxTokens:     intValue(spec.Config["max_tokens"]),
+				Threshold:     floatValue(spec.Config["threshold"]),
+				KeepRecent:    intValue(spec.Config["keep_recent"]),
+				SummaryFormat: stringValue(spec.Config["summary_format"]),
+			})
+		case "Compaction::SummaryTail":
+			strategies = append(strategies, SummaryTail{
+				Projection:  projection,
+				Provider:    provider,
+				Ingestor:    ingestor,
+				MaxMessages: intValue(spec.Config["max_messages"]),
+				KeepRecent:  intValue(spec.Config["keep_recent"]),
+				Prompt:      stringValue(spec.Config["prompt"]),
 			})
 		case "Permission::DenyByName":
 			strategies = append(strategies, DenyByName{
@@ -341,7 +375,8 @@ func knownProvider(kind string) bool {
 
 func knownStrategy(name string) bool {
 	switch name {
-	case "Compaction::MarkerTail", "Compaction::ToolOutputCap",
+	case "Compaction::MarkerTail", "Compaction::SummaryTail",
+		"Compaction::TokenMarkerTail", "Compaction::ToolOutputCap",
 		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval":
 		return true
 	default:
@@ -359,6 +394,17 @@ func intValue(value any) int {
 		return typed
 	case float64:
 		return int(typed)
+	default:
+		return 0
+	}
+}
+
+func floatValue(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
 	default:
 		return 0
 	}

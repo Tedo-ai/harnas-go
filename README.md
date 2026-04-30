@@ -20,7 +20,8 @@ toward parity with the Ruby reference.
   grep, run_shell, fetch_url
 - Tool middleware: Timed, Logged, Retried, RateLimiter, StaleReadGuard
 - Anthropic, OpenAI, and Gemini fixture ingestors
-- Session-scoped hooks, MarkerTail and ToolOutputCap compaction,
+- Session-scoped hooks, MarkerTail, TokenMarkerTail, SummaryTail,
+  and ToolOutputCap compaction,
   AlwaysAllow, DenyByName, and HumanApproval permission
 - Scripted provider errors and provider_error Log events
 

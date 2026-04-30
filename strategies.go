@@ -192,6 +192,197 @@ func replaceName(format, name string) string {
 	return strings.ReplaceAll(format, "$NAME", fmt.Sprintf("%q", name))
 }
 
+type TokenMarkerTail struct {
+	MaxTokens     int
+	Threshold     float64
+	KeepRecent    int
+	SummaryFormat string
+}
+
+func (t TokenMarkerTail) Install(session *Session) {
+	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
+		t.OnPreProjection(session)
+		return nil
+	})
+}
+
+func (t TokenMarkerTail) OnPreProjection(session *Session) {
+	maxTokens := t.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = 100000
+	}
+	threshold := t.Threshold
+	if threshold == 0 {
+		threshold = 0.85
+	}
+	format := t.SummaryFormat
+	if format == "" {
+		format = "[compacted $N earlier messages (~$E tokens -> threshold $T)]"
+	}
+	messages := messageEvents(session.Log)
+	estimated := estimateTokens(messages)
+	triggerTokens := int(float64(maxTokens) * threshold)
+	if estimated <= triggerTokens {
+		return
+	}
+	count := len(messages) - t.KeepRecent
+	if count <= 0 {
+		return
+	}
+	candidates := make([]int, 0, count)
+	for _, event := range messages[:count] {
+		candidates = append(candidates, event.Seq)
+	}
+	safeSeqs := toolPairSafeRange(session.Log, candidates)
+	if len(safeSeqs) == 0 {
+		return
+	}
+	replaces := make([]any, 0, len(safeSeqs))
+	for _, seq := range safeSeqs {
+		replaces = append(replaces, float64(seq))
+	}
+	summary := strings.ReplaceAll(format, "$N", fmt.Sprintf("%d", len(safeSeqs)))
+	summary = strings.ReplaceAll(summary, "$E", fmt.Sprintf("%d", estimated))
+	summary = strings.ReplaceAll(summary, "$T", fmt.Sprintf("%d", triggerTokens))
+	session.Log.Append(EventCompact, map[string]any{"replaces": replaces, "summary": summary})
+}
+
+type SummaryTail struct {
+	Projection  Projection
+	Provider    Provider
+	Ingestor    Ingestor
+	MaxMessages int
+	KeepRecent  int
+	Prompt      string
+}
+
+func (s SummaryTail) Install(session *Session) {
+	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
+		s.OnPreProjection(session)
+		return nil
+	})
+}
+
+func (s SummaryTail) OnPreProjection(session *Session) {
+	if s.Projection == nil || s.Provider == nil || s.Ingestor == nil {
+		return
+	}
+	maxMessages := s.MaxMessages
+	if maxMessages == 0 {
+		maxMessages = 20
+	}
+	messages := messageEvents(session.Log)
+	if len(messages) <= maxMessages {
+		return
+	}
+	count := len(messages) - s.KeepRecent
+	if count <= 0 {
+		return
+	}
+	candidates := make([]int, 0, count)
+	for _, event := range messages[:count] {
+		candidates = append(candidates, event.Seq)
+	}
+	safeSeqs := toolPairSafeRange(session.Log, candidates)
+	if len(safeSeqs) == 0 {
+		return
+	}
+	summary := s.summarize(messages, safeSeqs)
+	if summary == "" {
+		return
+	}
+	replaces := make([]any, 0, len(safeSeqs))
+	for _, seq := range safeSeqs {
+		replaces = append(replaces, float64(seq))
+	}
+	session.Log.Append(EventCompact, map[string]any{"replaces": replaces, "summary": summary})
+}
+
+func (s SummaryTail) summarize(messages []Event, seqs []int) string {
+	selected := map[int]bool{}
+	for _, seq := range seqs {
+		selected[seq] = true
+	}
+	subLog := NewLog()
+	for _, event := range messages {
+		if selected[event.Seq] {
+			subLog.Append(event.Type, event.Payload)
+		}
+	}
+	prompt := s.Prompt
+	if prompt == "" {
+		prompt = "Summarize the preceding conversation tersely, preserving facts the agent will need to continue the work. Return only the summary text, no preamble."
+	}
+	subLog.Append(EventUserMessage, map[string]any{"text": prompt})
+	request, err := s.Projection.Project(subLog)
+	if err != nil {
+		return ""
+	}
+	response, err := s.Provider.Call(request)
+	if err != nil {
+		return ""
+	}
+	events, err := s.Ingestor.Ingest(response)
+	if err != nil {
+		return ""
+	}
+	for _, event := range events {
+		subLog.Append(event.Type, event.Payload)
+	}
+	last, ok := subLog.LastAssistantMessage()
+	if !ok {
+		return ""
+	}
+	return stringValue(last.Payload["text"])
+}
+
+func estimateTokens(events []Event) int {
+	chars := 0
+	for _, event := range events {
+		for _, value := range event.Payload {
+			if text, ok := value.(string); ok {
+				chars += len([]rune(text))
+			}
+		}
+	}
+	return (chars + 3) / 4
+}
+
+func toolPairSafeRange(log *Log, candidates []int) []int {
+	candidateSet := map[int]bool{}
+	for _, seq := range candidates {
+		candidateSet[seq] = true
+	}
+	uses := map[string]int{}
+	results := map[string]int{}
+	for _, event := range log.Events() {
+		switch event.Type {
+		case EventToolUse:
+			uses[stringValue(event.Payload["id"])] = event.Seq
+		case EventToolResult:
+			results[stringValue(event.Payload["tool_use_id"])] = event.Seq
+		}
+	}
+	for id, useSeq := range uses {
+		resultSeq, hasResult := results[id]
+		if !hasResult {
+			delete(candidateSet, useSeq)
+			continue
+		}
+		if candidateSet[useSeq] != candidateSet[resultSeq] {
+			delete(candidateSet, useSeq)
+			delete(candidateSet, resultSeq)
+		}
+	}
+	out := []int{}
+	for _, seq := range candidates {
+		if candidateSet[seq] {
+			out = append(out, seq)
+		}
+	}
+	return out
+}
+
 type AlwaysAllow struct{}
 
 func (a AlwaysAllow) Install(session *Session) {

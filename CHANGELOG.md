@@ -24,6 +24,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
 - Added `Permission::AlwaysAllow` and `Permission::HumanApproval`
   strategies, including manifest resolution for HumanApproval prompt
   handlers.
+- Added `Compaction::TokenMarkerTail` and `Compaction::SummaryTail`,
+  including manifest wiring for provider-backed summaries.
 - Added buffered HTTP providers for Anthropic, OpenAI, and Gemini,
   including provider-specific auth headers, Gemini model-in-URL
   request handling, HTTP status errors, and invalid-JSON errors.
