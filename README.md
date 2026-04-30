@@ -18,6 +18,7 @@ toward parity with the Ruby reference.
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
 - Built-in tools: read_file, write_file, edit_file, list_dir, glob,
   grep, run_shell, fetch_url
+- Tool middleware: Timed, Logged, Retried, RateLimiter, StaleReadGuard
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks, MarkerTail and ToolOutputCap compaction,
   AlwaysAllow, DenyByName, and HumanApproval permission

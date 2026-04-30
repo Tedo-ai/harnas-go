@@ -19,6 +19,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
 - Added built-in tool handlers for read_file, write_file, edit_file,
   list_dir, glob, grep, run_shell, and fetch_url. The Go CLI resolves
   `harnas.builtin.*` manifest handlers automatically.
+- Added tool middleware helpers: Timed, Logged, Retried, RateLimiter,
+  and Log-sourced StaleReadGuard.
 - Added `Permission::AlwaysAllow` and `Permission::HumanApproval`
   strategies, including manifest resolution for HumanApproval prompt
   handlers.
