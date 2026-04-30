@@ -280,7 +280,7 @@ func providerFor(kind string, options ManifestOptions) (Provider, error) {
 		}
 	}
 	if kind == "mock" {
-		return nil, nil
+		return MockProvider{}, nil
 	}
 	key := apiKeyFor(kind, options.APIKeys)
 	if key == "" {

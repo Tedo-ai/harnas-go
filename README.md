@@ -14,6 +14,7 @@ toward parity with the Ruby reference.
 - Agent conformance: 20/20 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
+- Agent façade and `bin/harnas chat` / `bin/harnas run`
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks, MarkerTail and ToolOutputCap compaction,
@@ -26,6 +27,8 @@ toward parity with the Ruby reference.
 go test ./...
 bin/conformance
 bin/conformance-roundtrip --help
+bin/harnas run manifest.json --input "hello"
+bin/harnas chat manifest.json
 bin/harnas inspect session.jsonl
 ```
 
@@ -38,6 +41,8 @@ The Go port ships the persisted-Session operator commands shared with
 the Ruby and Python CLIs:
 
 ```sh
+bin/harnas run manifest.json --input "hello"
+bin/harnas chat manifest.json
 bin/harnas inspect session.jsonl [--json]
 bin/harnas fork session.jsonl --at-seq N --out forked.jsonl
 bin/harnas diff a.jsonl b.jsonl

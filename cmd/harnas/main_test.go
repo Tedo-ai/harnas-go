@@ -30,6 +30,63 @@ func TestInspectJSON(t *testing.T) {
 	}
 }
 
+func TestRunCommandChatsAndSaves(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	manifestPath := filepath.Join(dir, "manifest.json")
+	must(t, os.WriteFile(manifestPath, []byte(`{
+		"harnas_version":"0.1",
+		"name":"cli-test",
+		"provider":{"kind":"mock","max_tokens":1024},
+		"tools":[],
+		"strategies":[]
+	}`), 0o644))
+
+	var stdout, stderr bytes.Buffer
+	status := run([]string{"run", manifestPath, "--input", "hello"}, &stdout, &stderr)
+	if status != 0 {
+		t.Fatalf("status=%d stderr=%s", status, stderr.String())
+	}
+	if stdout.String() != "ok\n" {
+		t.Fatalf("unexpected stdout: %s", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "saved: ") {
+		t.Fatalf("missing save path: %s", stderr.String())
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".harnas", "runs", "*-cli-test.jsonl"))
+	must(t, err)
+	if len(matches) != 1 {
+		t.Fatalf("expected saved run, got %v", matches)
+	}
+}
+
+func TestChatCommandLoopsUntilExit(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	manifestPath := filepath.Join(dir, "manifest.json")
+	must(t, os.WriteFile(manifestPath, []byte(`{
+		"harnas_version":"0.1",
+		"name":"cli-chat",
+		"provider":{"kind":"mock","max_tokens":1024},
+		"tools":[],
+		"strategies":[]
+	}`), 0o644))
+
+	var stdout, stderr bytes.Buffer
+	err := runChat([]string{manifestPath}, strings.NewReader("hello\nexit\n"), &stdout, &stderr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout.String(), "harnas chat") || !strings.Contains(stdout.String(), "ok") {
+		t.Fatalf("unexpected stdout: %s", stdout.String())
+	}
+	matches, err := filepath.Glob(filepath.Join(dir, ".harnas", "runs", "*-cli-chat.jsonl"))
+	must(t, err)
+	if len(matches) != 1 {
+		t.Fatalf("expected saved run, got %v", matches)
+	}
+}
+
 func TestForkWritesPrefix(t *testing.T) {
 	dir := t.TempDir()
 	session := harnas.NewSession("ses_parent", nil, map[string]any{"label": "demo"})

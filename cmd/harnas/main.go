@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	harnas "github.com/Tedo-ai/harnas-go"
 )
@@ -30,6 +32,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	var err error
 	var status int
 	switch args[0] {
+	case "chat":
+		err = runChat(args[1:], os.Stdin, stdout, stderr)
 	case "diff":
 		status, err = runDiff(args[1:], stdout)
 	case "fork":
@@ -38,6 +42,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 		err = runInspect(args[1:], stdout)
 	case "project":
 		err = runProject(args[1:], stdout)
+	case "run":
+		status, err = runOnce(args[1:], stdout, stderr)
 	default:
 		usage(stderr)
 		return exitUsage
@@ -51,11 +57,129 @@ func run(args []string, stdout, stderr io.Writer) int {
 
 func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
+  harnas chat <manifest> [--provider KIND] [--model MODEL]
   harnas diff <a.jsonl> <b.jsonl>
   harnas fork <session.jsonl> --at-seq N --out <new.jsonl>
   harnas inspect <session.jsonl> [--json]
   harnas project <session.jsonl> --manifest PATH [--from-seq N] [--to-seq M]
+  harnas run <manifest> --input TEXT [--provider KIND] [--model MODEL]
 `)
+}
+
+func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	options, err := parseAgentOptions("chat", args, false)
+	if err != nil {
+		return err
+	}
+	agent, err := buildAgent(options)
+	if err != nil {
+		return err
+	}
+	fmt.Fprintf(stdout, "harnas chat · agent=%s\n", agent.Name)
+	fmt.Fprintln(stdout, "type 'exit' or 'quit' to leave, Ctrl-D to finish")
+	scanner := bufio.NewScanner(stdin)
+	for {
+		fmt.Fprint(stdout, "> ")
+		if !scanner.Scan() {
+			break
+		}
+		input := strings.TrimSpace(scanner.Text())
+		if input == "" {
+			continue
+		}
+		if input == "exit" || input == "quit" {
+			break
+		}
+		response, err := agent.Chat(input)
+		if err != nil {
+			return err
+		}
+		if providerError := terminalProviderError(agent.Session.Log); providerError != nil {
+			fmt.Fprintf(stderr, "provider error: %s\n", providerError.Payload["message"])
+			continue
+		}
+		fmt.Fprintln(stdout, response.Text)
+	}
+	if err := scanner.Err(); err != nil {
+		return err
+	}
+	return saveSession(agent, stderr)
+}
+
+func runOnce(args []string, stdout, stderr io.Writer) (int, error) {
+	options, err := parseAgentOptions("run", args, true)
+	if err != nil {
+		return exitUsage, err
+	}
+	agent, err := buildAgent(options)
+	if err != nil {
+		return exitUsage, err
+	}
+	response, err := agent.Chat(options.input)
+	if err != nil {
+		return exitUsage, err
+	}
+	if err := saveSession(agent, stderr); err != nil {
+		return exitUsage, err
+	}
+	if providerError := terminalProviderError(agent.Session.Log); providerError != nil {
+		fmt.Fprintf(stderr, "provider error: %s\n", providerError.Payload["message"])
+		return 2, nil
+	}
+	fmt.Fprintln(stdout, response.Text)
+	return exitSuccess, nil
+}
+
+type agentOptions struct {
+	manifestPath string
+	provider     string
+	model        string
+	input        string
+}
+
+func parseAgentOptions(command string, args []string, requireInput bool) (agentOptions, error) {
+	options := agentOptions{}
+	fs := flag.NewFlagSet(command, flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fs.StringVar(&options.provider, "provider", "", "provider override")
+	fs.StringVar(&options.model, "model", "", "model override")
+	if requireInput {
+		fs.StringVar(&options.input, "input", "", "user input")
+	}
+	takesValue := map[string]bool{"model": true, "provider": true}
+	if requireInput {
+		takesValue["input"] = true
+	}
+	if err := fs.Parse(permuteFlags(args, takesValue)); err != nil {
+		return options, err
+	}
+	if fs.NArg() != 1 {
+		return options, fmt.Errorf("usage: harnas %s <manifest>", command)
+	}
+	if requireInput && options.input == "" {
+		return options, fmt.Errorf("--input is required")
+	}
+	options.manifestPath = fs.Arg(0)
+	return options, nil
+}
+
+func buildAgent(options agentOptions) (*harnas.Agent, error) {
+	manifest, err := harnas.ReadManifest(options.manifestPath)
+	if err != nil {
+		return nil, err
+	}
+	if options.provider != "" {
+		manifest.Provider.Kind = options.provider
+	}
+	if options.model != "" {
+		manifest.Provider.Model = options.model
+	}
+	loaded, err := harnas.BuildManifest(manifest, harnas.ManifestOptions{})
+	if err != nil {
+		return nil, err
+	}
+	loaded.InstallStrategies()
+	return &harnas.Agent{Name: loaded.Name, Session: loaded.Session, Loaded: loaded}, nil
 }
 
 func runInspect(args []string, stdout io.Writer) error {
@@ -77,6 +201,60 @@ func runInspect(args []string, stdout io.Writer) error {
 		return writePrettyJSON(stdout, summary)
 	}
 	fmt.Fprint(stdout, formatInspection(summary))
+	return nil
+}
+
+func saveSession(agent *harnas.Agent, stderr io.Writer) error {
+	path := runPath(agent.Name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	if err := agent.Session.Save(path); err != nil {
+		return err
+	}
+	fmt.Fprintf(stderr, "saved: %s\n", path)
+	return nil
+}
+
+func runPath(name string) string {
+	stamp := time.Now().UTC().Format("20060102-150405")
+	return filepath.Join(homeDir(), ".harnas", "runs", stamp+"-"+slug(name)+".jsonl")
+}
+
+func homeDir() string {
+	if home := os.Getenv("HOME"); home != "" {
+		return home
+	}
+	if home, err := os.UserHomeDir(); err == nil {
+		return home
+	}
+	return "."
+}
+
+func slug(name string) string {
+	parts := strings.FieldsFunc(strings.ToLower(name), func(r rune) bool {
+		return !(r >= 'a' && r <= 'z' || r >= '0' && r <= '9')
+	})
+	return strings.Join(parts, "-")
+}
+
+func terminalProviderError(log *harnas.Log) *harnas.Event {
+	events := log.Events()
+	var errorEvent *harnas.Event
+	var assistantSeq = -1
+	for index := range events {
+		event := events[index]
+		if event.Type == harnas.EventAssistantMessage {
+			assistantSeq = event.Seq
+		}
+		if event.Type == harnas.EventProviderError && event.Payload["terminal"] == true {
+			copied := event
+			errorEvent = &copied
+		}
+	}
+	if errorEvent != nil && errorEvent.Seq > assistantSeq {
+		return errorEvent
+	}
 	return nil
 }
 
