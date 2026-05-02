@@ -27,6 +27,29 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 	}
 }
 
+func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
+	descriptors := BuiltinDescriptors()
+	if len(descriptors) != 8 {
+		t.Fatalf("expected 8 descriptors, got %d", len(descriptors))
+	}
+	byName := map[string]ToolSpec{}
+	for _, descriptor := range descriptors {
+		byName[descriptor.Name] = descriptor
+		if descriptor.Handler == "" || descriptor.Description == "" || descriptor.InputSchema == nil {
+			t.Fatalf("incomplete descriptor: %#v", descriptor)
+		}
+	}
+	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url"} {
+		if byName[name].Name == "" {
+			t.Fatalf("missing descriptor %s", name)
+		}
+	}
+	required := byName["grep"].InputSchema["required"].([]any)
+	if len(required) != 2 || required[0] != "pattern" || required[1] != "path" {
+		t.Fatalf("unexpected grep required schema: %#v", required)
+	}
+}
+
 func TestBuiltinReadWriteEditFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "note.txt")

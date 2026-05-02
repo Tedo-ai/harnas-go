@@ -34,6 +34,110 @@ func BuiltinHandlers() map[string]ToolHandler {
 	}
 }
 
+func BuiltinDescriptors() []ToolSpec {
+	return []ToolSpec{
+		{
+			Name:        "read_file",
+			Handler:     "harnas.builtin.read_file",
+			Description: "Read the contents of a file at the given path. Returns the file body as text.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"path": map[string]any{"type": "string"}},
+				"required":   []any{"path"},
+			},
+		},
+		{
+			Name:        "write_file",
+			Handler:     "harnas.builtin.write_file",
+			Description: "Write text content to a file at the given path, overwriting any existing content.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":    map[string]any{"type": "string"},
+					"content": map[string]any{"type": "string"},
+				},
+				"required": []any{"path", "content"},
+			},
+		},
+		{
+			Name:        "edit_file",
+			Handler:     "harnas.builtin.edit_file",
+			Description: "Replace one occurrence of `old_string` with `new_string` in the file at the given path. Pass replace_all: true to replace every occurrence. Fails if old_string is not found or appears more than once when replace_all is false.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path":        map[string]any{"type": "string"},
+					"old_string":  map[string]any{"type": "string"},
+					"new_string":  map[string]any{"type": "string"},
+					"replace_all": map[string]any{"type": "boolean"},
+				},
+				"required": []any{"path", "old_string", "new_string"},
+			},
+		},
+		{
+			Name:        "list_dir",
+			Handler:     "harnas.builtin.list_dir",
+			Description: "List the entries (files and directories) of the directory at the given path.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"path": map[string]any{"type": "string"}},
+				"required":   []any{"path"},
+			},
+		},
+		{
+			Name:        "glob",
+			Handler:     "harnas.builtin.glob",
+			Description: "Find files matching a glob pattern (e.g. \"**/*.rb\") under the optional `path` root. Returns a newline-separated list of paths, sorted.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern": map[string]any{"type": "string"},
+					"path":    map[string]any{"type": "string"},
+				},
+				"required": []any{"pattern"},
+			},
+		},
+		{
+			Name:        "grep",
+			Handler:     "harnas.builtin.grep",
+			Description: "Search for a regular expression in file contents under the given path (file or directory). Optional `glob` filters files; optional `case_insensitive` toggles the /i flag. Returns path:lineno:content matches, capped at 200.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"pattern":          map[string]any{"type": "string"},
+					"path":             map[string]any{"type": "string"},
+					"glob":             map[string]any{"type": "string"},
+					"case_insensitive": map[string]any{"type": "boolean"},
+				},
+				"required": []any{"pattern", "path"},
+			},
+		},
+		{
+			Name:        "run_shell",
+			Handler:     "harnas.builtin.run_shell",
+			Description: "Run a shell command and return its stdout, stderr, and exit status.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"command":         map[string]any{"type": "string"},
+					"timeout_seconds": map[string]any{"type": "integer", "minimum": float64(1)},
+				},
+				"required": []any{"command"},
+			},
+		},
+		{
+			Name:        "fetch_url",
+			Handler:     "harnas.builtin.fetch_url",
+			Description: "Fetch a URL via HTTP GET and return the response body as text.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"url": map[string]any{"type": "string"}},
+				"required":   []any{"url"},
+			},
+		},
+	}
+}
+
 func BuiltinReadFile(args map[string]any) (string, error) {
 	path, err := requiredString(args, "path")
 	if err != nil {
