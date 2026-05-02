@@ -8,7 +8,7 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.4.0** (2026-04-29). Tracks Harnas spec 0.4.0.
+**Version 0.5.0** (2026-05-02). Tracks Harnas spec 0.5.0.
 
 ## Status
 
@@ -19,10 +19,10 @@ surfaces needed for real Go adoption.
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
 - Streaming HTTP providers for Anthropic, OpenAI, and Gemini
 - Built-in tools: read_file, write_file, edit_file, list_dir, glob,
-  grep, run_shell, fetch_url
+  grep, run_shell, fetch_url, with manifest-ready descriptors
 - Tool middleware: Timed, Logged, Retried, RateLimiter, StaleReadGuard
 - Anthropic, OpenAI, and Gemini fixture ingestors
-- Session-scoped hooks, MarkerTail, TokenMarkerTail, SummaryTail,
+- Session-scoped hooks and observation bus, MarkerTail, TokenMarkerTail, SummaryTail,
   and ToolOutputCap compaction,
   AlwaysAllow, DenyByName, and HumanApproval permission
 - Scripted provider errors and provider_error Log events
@@ -53,7 +53,7 @@ bin/harnas chat manifest.json
 bin/harnas inspect session.jsonl [--json]
 bin/harnas fork session.jsonl --at-seq N --out forked.jsonl
 bin/harnas diff a.jsonl b.jsonl
-bin/harnas project session.jsonl --manifest manifest.json [--from-seq N] [--to-seq M]
+bin/harnas project session.jsonl --manifest manifest.json [--from-seq N] [--to-seq M] [--provider KIND] [--model MODEL]
 ```
 
 `project` renders the provider request body from a saved Log slice

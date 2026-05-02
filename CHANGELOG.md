@@ -4,6 +4,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-05-02
+
 ### Reference implementation (Go)
 
 #### Added
@@ -43,6 +45,18 @@ All notable changes to the Go implementation of Harnas are recorded here.
 - Log Events now carry an internal `ID` so Session JSONL save/load can
   preserve Event identity instead of synthesizing ids only while
   writing files.
+- `bin/harnas` now matches the Ruby CLI's provider/model override
+  defaults, provider-error formatting, and projection range
+  validation.
+- The manifest loader now rejects unknown fields, missing required
+  manifest keys, empty `system`, and malformed tool/strategy shapes,
+  with typed Go errors for validation, version, provider, strategy,
+  and handler failures.
+- Added a Session-scoped `Observation` bus plus core lifecycle
+  emissions for Log append, projection, provider calls, provider
+  responses/failures, and hook handler failures.
+- Added `BuiltinDescriptors()` so Go exposes the same manifest-ready
+  built-in tool descriptors as Ruby.
 
 ## [0.4.0] — 2026-04-29
 
