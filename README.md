@@ -35,6 +35,7 @@ bin/conformance-roundtrip --help
 bin/harnas run manifest.json --input "hello"
 bin/harnas chat manifest.json
 bin/harnas inspect session.jsonl
+bin/smoke-anthropic "say hello in one word"
 ```
 
 `bin/conformance` resolves fixtures from a sibling checkout of
@@ -57,3 +58,15 @@ bin/harnas project session.jsonl --manifest manifest.json [--from-seq N] [--to-s
 `project` renders the provider request body from a saved Log slice
 without making a provider call. It supports the conformance-facing
 Anthropic, OpenAI, and Gemini projections.
+
+## Live providers
+
+Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` to run
+the live smoke scripts. Each smoke script exercises both the buffered
+and streaming provider for that backend:
+
+```sh
+bin/smoke-anthropic "say hello in one word"
+bin/smoke-openai "say hello in one word"
+bin/smoke-gemini "say hello in one word"
+```

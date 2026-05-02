@@ -35,6 +35,9 @@ All notable changes to the Go implementation of Harnas are recorded here.
   with SSE parsing that accepts both LF and CRLF event separators.
 - `Agent.Stream` exposes the streaming path and `bin/harnas chat`
   prints assistant text deltas as they arrive.
+- Added live provider smoke scripts for Anthropic, OpenAI, and Gemini.
+  Each script exercises both buffered and streaming providers, and a
+  scheduled GitHub Actions workflow runs them weekly.
 - Added `RetryPolicy` with retryable HTTP/network decisions and
   configurable backoff, wired into `AgentLoop`.
 - Log Events now carry an internal `ID` so Session JSONL save/load can

@@ -1,0 +1,26 @@
+name: live providers
+
+on:
+  schedule:
+    - cron: "0 12 * * 1"
+  workflow_dispatch:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: bin/smoke-anthropic "say hello in one word"
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - run: bin/smoke-openai "say hello in one word"
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      - run: bin/smoke-gemini "say hello in one word"
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
