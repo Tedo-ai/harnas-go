@@ -99,7 +99,7 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			return err
 		}
 		if providerError := terminalProviderError(agent.Session.Log); providerError != nil {
-			fmt.Fprintf(stderr, "provider error: %s\n", providerError.Payload["message"])
+			fmt.Fprintf(stderr, "provider error: %s\n", formatProviderError(providerError))
 			continue
 		}
 		if hasStreamedText(response.Log) {
@@ -131,7 +131,7 @@ func runOnce(args []string, stdout, stderr io.Writer) (int, error) {
 		return exitUsage, err
 	}
 	if providerError := terminalProviderError(agent.Session.Log); providerError != nil {
-		fmt.Fprintf(stderr, "provider error: %s\n", providerError.Payload["message"])
+		fmt.Fprintf(stderr, "provider error: %s\n", formatProviderError(providerError))
 		return 2, nil
 	}
 	fmt.Fprintln(stdout, response.Text)
@@ -178,8 +178,8 @@ func buildAgent(options agentOptions) (*harnas.Agent, error) {
 	}
 	if options.provider != "" {
 		manifest.Provider.Kind = options.provider
-	}
-	if options.model != "" {
+		manifest.Provider.Model = resolveModel(options.provider, options.model)
+	} else if options.model != "" {
 		manifest.Provider.Model = options.model
 	}
 	loaded, err := harnas.BuildManifest(manifest, harnas.ManifestOptions{
@@ -190,6 +190,25 @@ func buildAgent(options agentOptions) (*harnas.Agent, error) {
 	}
 	loaded.InstallStrategies()
 	return &harnas.Agent{Name: loaded.Name, Session: loaded.Session, Loaded: loaded}, nil
+}
+
+func resolveModel(provider, explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if env := os.Getenv(strings.ToUpper(provider) + "_MODEL"); env != "" {
+		return env
+	}
+	switch provider {
+	case "anthropic":
+		return "claude-sonnet-4-5"
+	case "openai":
+		return "gpt-5.4-mini"
+	case "gemini":
+		return "gemini-flash-latest"
+	default:
+		return ""
+	}
 }
 
 func runInspect(args []string, stdout io.Writer) error {
@@ -266,6 +285,15 @@ func terminalProviderError(log *harnas.Log) *harnas.Event {
 		return errorEvent
 	}
 	return nil
+}
+
+func formatProviderError(event *harnas.Event) string {
+	message := stringValue(event.Payload["message"])
+	status := event.Payload["status"]
+	if status == nil || strings.HasPrefix(message, fmt.Sprintf("HTTP %v", status)) {
+		return message
+	}
+	return fmt.Sprintf("HTTP %v %s", status, message)
 }
 
 func hasStreamedText(log *harnas.Log) bool {
@@ -489,7 +517,7 @@ func runProject(args []string, stdout io.Writer) error {
 		return err
 	}
 	if fs.NArg() != 1 || *manifestPath == "" {
-		return fmt.Errorf("usage: harnas project <session.jsonl> --manifest PATH [--from-seq N] [--to-seq M]")
+		return fmt.Errorf("usage: harnas project <session.jsonl> --manifest PATH [--from-seq N] [--to-seq M] [--provider KIND] [--model MODEL]")
 	}
 	session, err := harnas.LoadSession(fs.Arg(0))
 	if err != nil {
@@ -501,8 +529,8 @@ func runProject(args []string, stdout io.Writer) error {
 	}
 	if *provider != "" {
 		manifest.Provider.Kind = *provider
-	}
-	if *model != "" {
+		manifest.Provider.Model = resolveModel(*provider, *model)
+	} else if *model != "" {
 		manifest.Provider.Model = *model
 	}
 	registry, err := projectRegistry(manifest.Tools)
@@ -510,7 +538,11 @@ func runProject(args []string, stdout io.Writer) error {
 		return err
 	}
 	projection := harnas.ProjectionForWithRegistry(manifest.Provider, manifest.System, registry)
-	request, err := projection.Project(sliceLog(session.Log, *fromSeq, *toSeq))
+	sliced, err := sliceLog(session.Log, *fromSeq, *toSeq)
+	if err != nil {
+		return err
+	}
+	request, err := projection.Project(sliced)
 	if err != nil {
 		return err
 	}
@@ -525,10 +557,16 @@ func projectRegistry(tools []harnas.ToolSpec) (*harnas.Registry, error) {
 	return harnas.BuildRegistry(tools, handlers)
 }
 
-func sliceLog(log *harnas.Log, fromSeq, toSeq int) *harnas.Log {
+func sliceLog(log *harnas.Log, fromSeq, toSeq int) (*harnas.Log, error) {
 	events := log.Events()
 	if toSeq < 0 {
 		toSeq = len(events) - 1
+	}
+	if fromSeq < 0 {
+		return nil, fmt.Errorf("--from-seq must be non-negative")
+	}
+	if toSeq < fromSeq {
+		return nil, fmt.Errorf("--to-seq must be >= --from-seq")
 	}
 	sliced := harnas.NewLog()
 	for _, event := range events {
@@ -536,7 +574,7 @@ func sliceLog(log *harnas.Log, fromSeq, toSeq int) *harnas.Log {
 			sliced.Restore(event)
 		}
 	}
-	return sliced
+	return sliced, nil
 }
 
 func writePrettyJSON(w io.Writer, value any) error {

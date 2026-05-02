@@ -87,6 +87,60 @@ func TestChatCommandLoopsUntilExit(t *testing.T) {
 	}
 }
 
+func TestProviderOverrideResolvesProviderDefaultModel(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("ANTHROPIC_API_KEY", "sk-test")
+	manifestPath := filepath.Join(dir, "manifest.json")
+	must(t, os.WriteFile(manifestPath, []byte(`{
+		"harnas_version":"0.1",
+		"name":"cli-provider",
+		"provider":{"kind":"mock","model":"mock-test","max_tokens":1024},
+		"tools":[],
+		"strategies":[]
+	}`), 0o644))
+
+	agent, err := buildAgent(agentOptions{manifestPath: manifestPath, provider: "anthropic"})
+	must(t, err)
+	request, err := agent.Loaded.Projection.Project(harnas.NewLog())
+	must(t, err)
+	if request["model"] != "claude-sonnet-4-5" {
+		t.Fatalf("expected anthropic default model, got %#v", request["model"])
+	}
+}
+
+func TestProviderOverridePrefersProviderModelEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("OPENAI_API_KEY", "sk-test")
+	t.Setenv("OPENAI_MODEL", "gpt-env")
+	manifestPath := filepath.Join(dir, "manifest.json")
+	must(t, os.WriteFile(manifestPath, []byte(`{
+		"harnas_version":"0.1",
+		"name":"cli-provider-env",
+		"provider":{"kind":"mock","model":"mock-test","max_tokens":1024},
+		"tools":[],
+		"strategies":[]
+	}`), 0o644))
+
+	agent, err := buildAgent(agentOptions{manifestPath: manifestPath, provider: "openai"})
+	must(t, err)
+	request, err := agent.Loaded.Projection.Project(harnas.NewLog())
+	must(t, err)
+	if request["model"] != "gpt-env" {
+		t.Fatalf("expected env model, got %#v", request["model"])
+	}
+}
+
+func TestProviderErrorFormattingMatchesRubyCLI(t *testing.T) {
+	event := harnas.Event{Payload: map[string]any{"status": float64(503), "message": "unavailable"}}
+	if got := formatProviderError(&event); got != "HTTP 503 unavailable" {
+		t.Fatalf("unexpected formatted error: %s", got)
+	}
+	event.Payload["message"] = "HTTP 503: unavailable"
+	if got := formatProviderError(&event); got != "HTTP 503: unavailable" {
+		t.Fatalf("unexpected formatted error: %s", got)
+	}
+}
+
 func TestForkWritesPrefix(t *testing.T) {
 	dir := t.TempDir()
 	session := harnas.NewSession("ses_parent", nil, map[string]any{"label": "demo"})
@@ -172,6 +226,28 @@ func TestProjectRendersProviderRequest(t *testing.T) {
 	must(t, json.Unmarshal(stdout.Bytes(), &request))
 	if request["model"] != "mock-test" || request["max_tokens"].(float64) != 1024 {
 		t.Fatalf("unexpected request: %#v", request)
+	}
+}
+
+func TestProjectRejectsInvalidSeqRange(t *testing.T) {
+	dir := t.TempDir()
+	session := harnas.NewSession("ses_project", nil, nil)
+	session.Log.Append(harnas.EventUserMessage, map[string]any{"text": "hello"})
+	sessionPath := filepath.Join(dir, "session.jsonl")
+	manifestPath := filepath.Join(dir, "manifest.json")
+	must(t, session.Save(sessionPath))
+	must(t, os.WriteFile(manifestPath, []byte(`{
+		"harnas_version":"0.1",
+		"name":"cli-test",
+		"provider":{"kind":"mock","model":"mock-test","max_tokens":1024},
+		"tools":[],
+		"strategies":[]
+	}`), 0o644))
+
+	var stdout, stderr bytes.Buffer
+	status := run([]string{"project", sessionPath, "--manifest", manifestPath, "--from-seq", "2", "--to-seq", "1"}, &stdout, &stderr)
+	if status != 1 || !strings.Contains(stderr.String(), "--to-seq must be >= --from-seq") {
+		t.Fatalf("status=%d stdout=%s stderr=%s", status, stdout.String(), stderr.String())
 	}
 }
 
