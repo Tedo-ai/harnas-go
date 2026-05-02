@@ -51,6 +51,7 @@ type ManifestOptions struct {
 	ToolHandlers     map[string]ToolHandler
 	StrategyHandlers map[string]ApprovalHandler
 	Providers        map[string]Provider
+	StreamProviders  map[string]StreamProvider
 	APIKeys          map[string]string
 }
 
@@ -102,6 +103,10 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
+	streamProvider, err := streamProviderFor(manifest.Provider.Kind, options)
+	if err != nil {
+		return nil, err
+	}
 	ingestor := IngestorFor(manifest.Provider.Kind)
 	strategies, err := BuildStrategiesWithRuntime(
 		manifest.Strategies,
@@ -114,13 +119,14 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 		return nil, err
 	}
 	return &LoadedManifest{
-		Name:       manifest.Name,
-		Session:    CreateSession(map[string]any{"manifest_name": manifest.Name}),
-		Projection: projection,
-		Provider:   provider,
-		Ingestor:   ingestor,
-		Registry:   registry,
-		Strategies: strategies,
+		Name:           manifest.Name,
+		Session:        CreateSession(map[string]any{"manifest_name": manifest.Name}),
+		Projection:     projection,
+		Provider:       provider,
+		StreamProvider: streamProvider,
+		Ingestor:       ingestor,
+		Registry:       registry,
+		Strategies:     strategies,
 	}, nil
 }
 
@@ -346,6 +352,31 @@ func providerFor(kind string, options ManifestOptions) (Provider, error) {
 		return NewOpenAIProvider(key), nil
 	case "gemini":
 		return NewGeminiProvider(key), nil
+	default:
+		return nil, manifestError("unknown provider kind: %q", kind)
+	}
+}
+
+func streamProviderFor(kind string, options ManifestOptions) (StreamProvider, error) {
+	if options.StreamProviders != nil {
+		if provider := options.StreamProviders[kind]; provider != nil {
+			return provider, nil
+		}
+	}
+	if kind == "mock" {
+		return nil, nil
+	}
+	key := apiKeyFor(kind, options.APIKeys)
+	if key == "" {
+		return nil, manifestError("api_keys[%q] is required for stream provider %s", kind, kind)
+	}
+	switch kind {
+	case "anthropic":
+		return NewAnthropicStreamProvider(key), nil
+	case "openai":
+		return NewOpenAIStreamProvider(key), nil
+	case "gemini":
+		return NewGeminiStreamProvider(key), nil
 	default:
 		return nil, manifestError("unknown provider kind: %q", kind)
 	}

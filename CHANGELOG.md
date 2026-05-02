@@ -31,6 +31,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
 - Added buffered HTTP providers for Anthropic, OpenAI, and Gemini,
   including provider-specific auth headers, Gemini model-in-URL
   request handling, HTTP status errors, and invalid-JSON errors.
+- Added streaming HTTP providers for Anthropic, OpenAI, and Gemini,
+  with SSE parsing that accepts both LF and CRLF event separators.
+- `Agent.Stream` exposes the streaming path and `bin/harnas chat`
+  prints assistant text deltas as they arrive.
 - Added `RetryPolicy` with retryable HTTP/network decisions and
   configurable backoff, wired into `AgentLoop`.
 - Log Events now carry an internal `ID` so Session JSONL save/load can

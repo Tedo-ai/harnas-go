@@ -90,7 +90,11 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 		if input == "exit" || input == "quit" {
 			break
 		}
-		response, err := agent.Chat(input)
+		response, err := agent.Stream(input, func(event harnas.Event) {
+			if event.Type == harnas.EventAssistantTextDelta {
+				fmt.Fprint(stdout, event.Payload["chunk"])
+			}
+		})
 		if err != nil {
 			return err
 		}
@@ -98,7 +102,11 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			fmt.Fprintf(stderr, "provider error: %s\n", providerError.Payload["message"])
 			continue
 		}
-		fmt.Fprintln(stdout, response.Text)
+		if hasStreamedText(response.Log) {
+			fmt.Fprintln(stdout)
+		} else {
+			fmt.Fprintln(stdout, response.Text)
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		return err
@@ -258,6 +266,15 @@ func terminalProviderError(log *harnas.Log) *harnas.Event {
 		return errorEvent
 	}
 	return nil
+}
+
+func hasStreamedText(log *harnas.Log) bool {
+	for _, event := range log.Events() {
+		if event.Type == harnas.EventAssistantTextDelta {
+			return true
+		}
+	}
+	return false
 }
 
 func inspectSession(session *harnas.Session) map[string]any {
