@@ -4,6 +4,16 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-05-02
+
+### Reference implementation (Go)
+
+#### Changed
+
+- No Go code changes. This release keeps the Go implementation aligned
+  with the spec and sibling implementation tags while harnas-python
+  reaches the same public feature surface.
+
 ## [0.5.0] — 2026-05-02
 
 ### Reference implementation (Go)
