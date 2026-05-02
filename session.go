@@ -8,10 +8,11 @@ import (
 )
 
 type Session struct {
-	ID       string
-	Log      *Log
-	Metadata map[string]any
-	Hooks    *Hooks
+	ID          string
+	Log         *Log
+	Metadata    map[string]any
+	Hooks       *Hooks
+	Observation *Observation
 }
 
 func NewSession(id string, log *Log, metadata map[string]any) *Session {
@@ -21,11 +22,14 @@ func NewSession(id string, log *Log, metadata map[string]any) *Session {
 	if metadata == nil {
 		metadata = map[string]any{}
 	}
+	observation := NewObservation()
+	log.Observation = observation
 	return &Session{
-		ID:       id,
-		Log:      log,
-		Metadata: metadata,
-		Hooks:    NewHooks(),
+		ID:          id,
+		Log:         log,
+		Metadata:    metadata,
+		Hooks:       NewHooks(),
+		Observation: observation,
 	}
 }
 
@@ -35,6 +39,7 @@ func CreateSession(metadata map[string]any) *Session {
 
 func (s *Session) Fork(atSeq int) *Session {
 	forkedLog := NewLog()
+	forkedLog.Observation = s.Observation
 	for _, event := range s.Log.Events() {
 		if event.Seq > atSeq {
 			break

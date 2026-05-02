@@ -47,6 +47,11 @@ func (l AgentLoop) runTurn() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	l.Session.Observation.Emit("projection_invoked", map[string]any{
+		"projection": projectionName(l.Projection),
+		"log_size":   len(l.Session.Log.Events()),
+		"request":    request,
+	})
 	if ok := l.callProviderWithRetry(request); !ok {
 		return "provider_failed", nil
 	}
@@ -84,18 +89,54 @@ func (l AgentLoop) callProviderWithRetry(request map[string]any) bool {
 }
 
 func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
+	started := time.Now()
+	l.Session.Hooks.Invoke("pre_provider_call", map[string]any{"session": l.Session, "request": request})
+	l.Session.Observation.Emit("provider_called", map[string]any{
+		"provider": providerName(l.Provider),
+		"request":  request,
+	})
 	if l.StreamProvider != nil {
 		err := l.StreamProvider.Call(request, func(event EventArgs) {
 			l.Session.Log.Append(event.Type, event.Payload)
 		})
 		if err != nil {
+			l.Session.Observation.Emit("provider_failed", map[string]any{
+				"provider":    providerName(l.Provider),
+				"duration_ms": float64(time.Since(started).Milliseconds()),
+				"error":       err.Error(),
+			})
 			return err
 		}
+		l.Session.Hooks.Invoke("post_provider_call", map[string]any{
+			"session":  l.Session,
+			"request":  request,
+			"response": nil,
+		})
+		l.Session.Observation.Emit("provider_responded", map[string]any{
+			"provider":    providerName(l.Provider),
+			"duration_ms": float64(time.Since(started).Milliseconds()),
+			"response":    nil,
+		})
 	} else {
 		response, err := l.Provider.Call(request)
 		if err != nil {
+			l.Session.Observation.Emit("provider_failed", map[string]any{
+				"provider":    providerName(l.Provider),
+				"duration_ms": float64(time.Since(started).Milliseconds()),
+				"error":       err.Error(),
+			})
 			return err
 		}
+		l.Session.Hooks.Invoke("post_provider_call", map[string]any{
+			"session":  l.Session,
+			"request":  request,
+			"response": response,
+		})
+		l.Session.Observation.Emit("provider_responded", map[string]any{
+			"provider":    providerName(l.Provider),
+			"duration_ms": float64(time.Since(started).Milliseconds()),
+			"response":    response,
+		})
 		events, err := l.Ingestor.Ingest(response)
 		if err != nil {
 			return err
@@ -105,6 +146,19 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func projectionName(projection Projection) string {
+	switch projection.(type) {
+	case AnthropicProjection, *AnthropicProjection:
+		return "anthropic"
+	case OpenAIProjection, *OpenAIProjection:
+		return "openai"
+	case GeminiProjection, *GeminiProjection:
+		return "gemini"
+	default:
+		return "unknown"
+	}
 }
 
 type statusError interface {

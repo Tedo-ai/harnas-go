@@ -7,7 +7,8 @@ import (
 )
 
 type Log struct {
-	events []Event
+	events      []Event
+	Observation *Observation
 }
 
 func NewLog() *Log {
@@ -18,6 +19,7 @@ func (l *Log) Append(eventType EventType, payload map[string]any) Event {
 	seq := len(l.events)
 	event := Event{ID: eventID(seq, payload), Seq: seq, Type: eventType, Payload: payload}
 	l.events = append(l.events, event)
+	l.Observation.Emit("event_appended", map[string]any{"event": event, "log_size": len(l.events)})
 	return event
 }
 
