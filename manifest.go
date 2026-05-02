@@ -1,6 +1,7 @@
 package harnas
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -16,6 +17,12 @@ type ManifestError struct {
 func (e ManifestError) Error() string {
 	return e.Message
 }
+
+type ValidationError struct{ ManifestError }
+type UnsupportedVersionError struct{ ManifestError }
+type UnknownProviderError struct{ ManifestError }
+type UnknownStrategyError struct{ ManifestError }
+type UnresolvedHandlerError struct{ ManifestError }
 
 type Manifest struct {
 	Version    string         `json:"harnas_version"`
@@ -84,10 +91,88 @@ func ReadManifest(path string) (Manifest, error) {
 	if err != nil {
 		return manifest, err
 	}
-	if err := json.Unmarshal(data, &manifest); err != nil {
+	if err := validateManifestKeys(data); err != nil {
 		return manifest, err
 	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return manifest, validationError("%s", err.Error())
+	}
 	return manifest, ValidateManifest(manifest)
+}
+
+func validateManifestKeys(data []byte) error {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	required := []string{"harnas_version", "name", "provider", "tools", "strategies"}
+	for _, key := range required {
+		if _, ok := raw[key]; !ok {
+			return validationError("manifest missing required field %q", key)
+		}
+	}
+	if value, ok := raw["system"]; ok {
+		var system string
+		if err := json.Unmarshal(value, &system); err != nil {
+			return validationError("%s", err.Error())
+		}
+		if system == "" {
+			return validationError("system must not be empty")
+		}
+	}
+	if err := validateProviderKeys(raw["provider"]); err != nil {
+		return err
+	}
+	if err := validateToolKeys(raw["tools"]); err != nil {
+		return err
+	}
+	if err := validateStrategyKeys(raw["strategies"]); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateProviderKeys(raw json.RawMessage) error {
+	var provider map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &provider); err != nil {
+		return validationError("%s", err.Error())
+	}
+	for _, key := range []string{"kind", "max_tokens"} {
+		if _, ok := provider[key]; !ok {
+			return validationError("provider missing required field %q", key)
+		}
+	}
+	return nil
+}
+
+func validateToolKeys(raw json.RawMessage) error {
+	var tools []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &tools); err != nil {
+		return validationError("%s", err.Error())
+	}
+	for index, tool := range tools {
+		for _, key := range []string{"name", "handler", "description", "input_schema"} {
+			if _, ok := tool[key]; !ok {
+				return validationError("tools[%d] missing required field %q", index, key)
+			}
+		}
+	}
+	return nil
+}
+
+func validateStrategyKeys(raw json.RawMessage) error {
+	var strategies []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &strategies); err != nil {
+		return validationError("%s", err.Error())
+	}
+	for index, strategy := range strategies {
+		if _, ok := strategy["name"]; !ok {
+			return validationError("strategies[%d] missing required field %q", index, "name")
+		}
+	}
+	return nil
 }
 
 func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest, error) {
@@ -157,22 +242,22 @@ func (l *LoadedManifest) Loop() AgentLoop {
 
 func ValidateManifest(manifest Manifest) error {
 	if manifest.Version != SupportedManifestVersion {
-		return manifestError("manifest version %q not in supported [%q]", manifest.Version, SupportedManifestVersion)
+		return unsupportedVersionError("manifest version %q not in supported [%q]", manifest.Version, SupportedManifestVersion)
 	}
 	if manifest.Name == "" {
-		return manifestError("manifest name must not be empty")
+		return validationError("manifest name must not be empty")
 	}
 	if manifest.Provider.Kind == "" {
-		return manifestError("provider.kind is required")
+		return validationError("provider.kind is required")
 	}
 	if !knownProvider(manifest.Provider.Kind) {
-		return manifestError("unknown provider kind: %q", manifest.Provider.Kind)
+		return unknownProviderError("unknown provider kind: %q", manifest.Provider.Kind)
 	}
 	if manifest.Provider.Kind != "mock" && manifest.Provider.Model == "" {
-		return manifestError("provider.model is required for provider %q", manifest.Provider.Kind)
+		return validationError("provider.model is required for provider %q", manifest.Provider.Kind)
 	}
 	if manifest.Provider.MaxTokens < 1 {
-		return manifestError("provider.max_tokens must be >= 1")
+		return validationError("provider.max_tokens must be >= 1")
 	}
 	if err := validateTools(manifest.Tools); err != nil {
 		return err
@@ -187,17 +272,17 @@ func validateTools(tools []ToolSpec) error {
 	seen := map[string]bool{}
 	for _, tool := range tools {
 		if tool.Name == "" {
-			return manifestError("tool.name must not be empty")
+			return validationError("tool.name must not be empty")
 		}
 		if seen[tool.Name] {
-			return manifestError("duplicate tool name: %q", tool.Name)
+			return validationError("duplicate tool name: %q", tool.Name)
 		}
 		seen[tool.Name] = true
 		if tool.Handler == "" {
-			return manifestError("tool %q handler must not be empty", tool.Name)
+			return validationError("tool %q handler must not be empty", tool.Name)
 		}
 		if tool.InputSchema == nil {
-			return manifestError("tool %q input_schema is required", tool.Name)
+			return validationError("tool %q input_schema is required", tool.Name)
 		}
 	}
 	return nil
@@ -207,10 +292,10 @@ func validateStrategies(strategies []StrategySpec) error {
 	pattern := regexp.MustCompile(`^[A-Z][A-Za-z0-9]+::[A-Z][A-Za-z0-9]+$`)
 	for _, strategy := range strategies {
 		if !pattern.MatchString(strategy.Name) {
-			return manifestError("strategy name %q is not canonical", strategy.Name)
+			return validationError("strategy name %q is not canonical", strategy.Name)
 		}
 		if !knownStrategy(strategy.Name) {
-			return manifestError("unknown canonical strategy: %q", strategy.Name)
+			return unknownStrategyError("unknown canonical strategy: %q", strategy.Name)
 		}
 	}
 	return nil
@@ -221,7 +306,7 @@ func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry
 	for _, spec := range specs {
 		handler, ok := handlers[spec.Handler]
 		if !ok {
-			return nil, manifestError("tool handler %q not in tool_handlers", spec.Handler)
+			return nil, unresolvedHandlerError("tool handler %q not in tool_handlers", spec.Handler)
 		}
 		if err := registry.Register(Tool{
 			Name:        spec.Name,
@@ -288,14 +373,14 @@ func BuildStrategiesWithRuntime(
 			name := stringValue(spec.Config["prompt"])
 			handler := handlers[name]
 			if handler == nil {
-				return nil, manifestError("strategy handler %q not in strategy_handlers", name)
+				return nil, unresolvedHandlerError("strategy handler %q not in strategy_handlers", name)
 			}
 			strategies = append(strategies, HumanApproval{
 				Prompt:       handler,
 				DenialReason: stringValue(spec.Config["denial_reason"]),
 			})
 		default:
-			return nil, manifestError("unknown canonical strategy: %q", spec.Name)
+			return nil, unknownStrategyError("unknown canonical strategy: %q", spec.Name)
 		}
 	}
 	return strategies, nil
@@ -353,7 +438,7 @@ func providerFor(kind string, options ManifestOptions) (Provider, error) {
 	case "gemini":
 		return NewGeminiProvider(key), nil
 	default:
-		return nil, manifestError("unknown provider kind: %q", kind)
+		return nil, unknownProviderError("unknown provider kind: %q", kind)
 	}
 }
 
@@ -378,7 +463,7 @@ func streamProviderFor(kind string, options ManifestOptions) (StreamProvider, er
 	case "gemini":
 		return NewGeminiStreamProvider(key), nil
 	default:
-		return nil, manifestError("unknown provider kind: %q", kind)
+		return nil, unknownProviderError("unknown provider kind: %q", kind)
 	}
 }
 
@@ -422,6 +507,26 @@ func knownStrategy(name string) bool {
 
 func manifestError(format string, args ...any) error {
 	return ManifestError{Message: fmt.Sprintf(format, args...)}
+}
+
+func validationError(format string, args ...any) error {
+	return ValidationError{ManifestError{Message: fmt.Sprintf(format, args...)}}
+}
+
+func unsupportedVersionError(format string, args ...any) error {
+	return UnsupportedVersionError{ManifestError{Message: fmt.Sprintf(format, args...)}}
+}
+
+func unknownProviderError(format string, args ...any) error {
+	return UnknownProviderError{ManifestError{Message: fmt.Sprintf(format, args...)}}
+}
+
+func unknownStrategyError(format string, args ...any) error {
+	return UnknownStrategyError{ManifestError{Message: fmt.Sprintf(format, args...)}}
+}
+
+func unresolvedHandlerError(format string, args ...any) error {
+	return UnresolvedHandlerError{ManifestError{Message: fmt.Sprintf(format, args...)}}
 }
 
 func intValue(value any) int {

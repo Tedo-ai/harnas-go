@@ -1,6 +1,7 @@
 package harnas
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,6 +73,10 @@ func TestLoadManifestRejectsUnsupportedVersion(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
+	var versionError UnsupportedVersionError
+	if !errors.As(err, &versionError) {
+		t.Fatalf("expected UnsupportedVersionError, got %T: %v", err, err)
+	}
 }
 
 func TestLoadManifestRejectsUnresolvedToolHandler(t *testing.T) {
@@ -93,6 +98,60 @@ func TestLoadManifestRejectsUnresolvedToolHandler(t *testing.T) {
 	_, err := LoadManifest(path, ManifestOptions{})
 	if err == nil {
 		t.Fatal("expected error")
+	}
+	var handlerError UnresolvedHandlerError
+	if !errors.As(err, &handlerError) {
+		t.Fatalf("expected UnresolvedHandlerError, got %T: %v", err, err)
+	}
+}
+
+func TestLoadManifestRejectsSchemaShapeProblems(t *testing.T) {
+	cases := map[string]string{
+		"missing strategies": `{
+			"harnas_version":"0.1",
+			"name":"bad",
+			"provider":{"kind":"mock","max_tokens":1},
+			"tools":[]
+		}`,
+		"empty system": `{
+			"harnas_version":"0.1",
+			"name":"bad",
+			"system":"",
+			"provider":{"kind":"mock","max_tokens":1},
+			"tools":[],
+			"strategies":[]
+		}`,
+		"unknown field": `{
+			"harnas_version":"0.1",
+			"name":"bad",
+			"provider":{"kind":"mock","max_tokens":1},
+			"tools":[],
+			"strategies":[],
+			"extra":true
+		}`,
+		"tool missing description": `{
+			"harnas_version":"0.1",
+			"name":"bad",
+			"provider":{"kind":"mock","max_tokens":1},
+			"tools":[{"name":"echo","handler":"test.echo","input_schema":{"type":"object"}}],
+			"strategies":[]
+		}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "manifest.json")
+			mustWrite(t, path, body)
+
+			_, err := LoadManifest(path, ManifestOptions{})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			var validationError ValidationError
+			if !errors.As(err, &validationError) {
+				t.Fatalf("expected ValidationError, got %T: %v", err, err)
+			}
+		})
 	}
 }
 
