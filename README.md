@@ -3,9 +3,10 @@
 Go implementation of [Harnas](https://github.com/Tedo-ai/harnas), a
 specification for LLM agent harnesses.
 
-This repo is a conformance-first peer implementation. It starts with
-the smallest buffered AgentLoop surface and grows fixture by fixture
-toward parity with the Ruby reference.
+This repo is a conformance-first peer implementation. It started with
+the smallest buffered AgentLoop surface and now includes the live
+provider, CLI, tool, middleware, strategy, persistence, and conformance
+surfaces needed for real Go adoption.
 
 **Version 0.4.0** (2026-04-29). Tracks Harnas spec 0.4.0.
 
