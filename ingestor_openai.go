@@ -9,13 +9,17 @@ func (OpenAIIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 	message := asMap(choice["message"])
 	text, _ := message["content"].(string)
 	stopReason := normalizeOpenAIStop(choice["finish_reason"])
+	payload := map[string]any{
+		"text":        text,
+		"stop_reason": stopReason,
+		"usage":       normalizeOpenAIUsage(response["usage"]),
+	}
+	if reasoning := openAIReasoningBlocks(message); len(reasoning) > 0 {
+		payload["reasoning"] = reasoning
+	}
 	events := []EventArgs{{
-		Type: EventAssistantMessage,
-		Payload: map[string]any{
-			"text":        text,
-			"stop_reason": stopReason,
-			"usage":       normalizeOpenAIUsage(response["usage"]),
-		},
+		Type:    EventAssistantMessage,
+		Payload: payload,
 	}}
 	for _, call := range asSlice(message["tool_calls"]) {
 		toolCall := asMap(call)
@@ -35,6 +39,27 @@ func (OpenAIIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 		})
 	}
 	return events, nil
+}
+
+func openAIReasoningBlocks(message map[string]any) []any {
+	blocks := []any{}
+	if reasoning := stringValue(message["reasoning"]); reasoning != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": reasoning})
+	}
+	for _, raw := range asSlice(message["reasoning_details"]) {
+		detail := asMap(raw)
+		text := stringValue(detail["text"])
+		if text == "" {
+			text = stringValue(detail["reasoning"])
+		}
+		if text == "" {
+			text = stringValue(detail["content"])
+		}
+		if text != "" {
+			blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		}
+	}
+	return blocks
 }
 
 func normalizeOpenAIStop(value any) string {

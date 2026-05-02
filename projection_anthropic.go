@@ -8,17 +8,28 @@ type AnthropicProjection struct {
 }
 
 func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
-	messages := []map[string]any{}
+	groups := []map[string]any{}
+	var current map[string]any
 	for _, event := range ApplyMutations(log) {
-		text, _ := event.Payload["text"].(string)
-		switch event.Type {
-		case EventUserMessage, EventSummary:
-			messages = append(messages, map[string]any{"role": "user", "content": text})
-		case EventAssistantMessage:
-			if text != "" {
-				messages = append(messages, map[string]any{"role": "assistant", "content": text})
-			}
+		role, blocks := p.translate(event)
+		if role == "" || len(blocks) == 0 {
+			continue
 		}
+		if current != nil && current["role"] == role {
+			current["blocks"] = append(asSlice(current["blocks"]), blocks...)
+		} else {
+			if current != nil {
+				groups = append(groups, current)
+			}
+			current = map[string]any{"role": role, "blocks": blocks}
+		}
+	}
+	if current != nil {
+		groups = append(groups, current)
+	}
+	messages := []map[string]any{}
+	for _, group := range groups {
+		messages = append(messages, finalizeAnthropicGroup(stringValue(group["role"]), asSlice(group["blocks"])))
 	}
 	request := map[string]any{
 		"model":      p.Model,
@@ -32,6 +43,66 @@ func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
 		request["tools"] = anthropicToolDescriptors(p.Registry)
 	}
 	return request, nil
+}
+
+func (p AnthropicProjection) translate(event Event) (string, []any) {
+	text, _ := event.Payload["text"].(string)
+	switch event.Type {
+	case EventUserMessage, EventSummary:
+		return "user", []any{map[string]any{"type": "text", "text": text}}
+	case EventAssistantMessage:
+		blocks := anthropicReasoningBlocks(event)
+		if text != "" {
+			blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		}
+		return "assistant", blocks
+	case EventToolUse:
+		return "assistant", []any{map[string]any{
+			"type":  "tool_use",
+			"id":    event.Payload["id"],
+			"name":  event.Payload["name"],
+			"input": asMap(event.Payload["arguments"]),
+		}}
+	case EventToolResult:
+		block := map[string]any{
+			"type":        "tool_result",
+			"tool_use_id": event.Payload["tool_use_id"],
+		}
+		if errText := stringValue(event.Payload["error"]); errText != "" {
+			block["content"] = errText
+			block["is_error"] = true
+		} else {
+			block["content"] = stringValue(event.Payload["output"])
+		}
+		return "user", []any{block}
+	default:
+		return "", nil
+	}
+}
+
+func finalizeAnthropicGroup(role string, blocks []any) map[string]any {
+	if len(blocks) == 1 {
+		if block := asMap(blocks[0]); block["type"] == "text" {
+			return map[string]any{"role": role, "content": block["text"]}
+		}
+	}
+	return map[string]any{"role": role, "content": blocks}
+}
+
+func anthropicReasoningBlocks(event Event) []any {
+	blocks := []any{}
+	for _, raw := range asSlice(event.Payload["reasoning"]) {
+		block := asMap(raw)
+		if block["type"] != "text" {
+			continue
+		}
+		out := map[string]any{"type": "thinking", "thinking": stringValue(block["text"])}
+		if signature := stringValue(block["signature"]); signature != "" {
+			out["signature"] = signature
+		}
+		blocks = append(blocks, out)
+	}
+	return blocks
 }
 
 type OpenAIProjection struct {

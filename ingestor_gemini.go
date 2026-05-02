@@ -10,11 +10,22 @@ func (g *GeminiIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 	candidate := firstMap(response["candidates"])
 	content := asMap(candidate["content"])
 	text := ""
+	reasoning := []any{}
 	events := []EventArgs{}
 	for _, raw := range asSlice(content["parts"]) {
 		part := asMap(raw)
 		if value, ok := part["text"].(string); ok {
 			text += value
+		}
+		thought := stringValue(part["thought"])
+		if thought == "" {
+			thought = stringValue(part["thoughtSummary"])
+		}
+		if thought == "" {
+			thought = stringValue(part["thought_summary"])
+		}
+		if thought != "" {
+			reasoning = append(reasoning, map[string]any{"type": "text", "text": thought})
 		}
 		if call, ok := part["functionCall"]; ok {
 			functionCall := asMap(call)
@@ -31,13 +42,17 @@ func (g *GeminiIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 			})
 		}
 	}
+	payload := map[string]any{
+		"text":        text,
+		"stop_reason": normalizeGeminiStop(candidate["finishReason"], len(events) > 0),
+		"usage":       normalizeGeminiUsage(response["usageMetadata"]),
+	}
+	if len(reasoning) > 0 {
+		payload["reasoning"] = reasoning
+	}
 	result := []EventArgs{{
-		Type: EventAssistantMessage,
-		Payload: map[string]any{
-			"text":        text,
-			"stop_reason": normalizeGeminiStop(candidate["finishReason"], len(events) > 0),
-			"usage":       normalizeGeminiUsage(response["usageMetadata"]),
-		},
+		Type:    EventAssistantMessage,
+		Payload: payload,
 	}}
 	result = append(result, events...)
 	return result, nil

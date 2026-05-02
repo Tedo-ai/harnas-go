@@ -4,6 +4,7 @@ type AnthropicIngestor struct{}
 
 func (AnthropicIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 	text := ""
+	reasoning := []any{}
 	events := []EventArgs{}
 	for _, block := range asSlice(response["content"]) {
 		part, ok := block.(map[string]any)
@@ -14,6 +15,12 @@ func (AnthropicIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 		case "text":
 			chunk, _ := part["text"].(string)
 			text += chunk
+		case "thinking":
+			out := map[string]any{"type": "text", "text": stringValue(part["thinking"])}
+			if signature := stringValue(part["signature"]); signature != "" {
+				out["signature"] = signature
+			}
+			reasoning = append(reasoning, out)
 		case "tool_use":
 			events = append(events, EventArgs{
 				Type: EventToolUse,
@@ -31,13 +38,18 @@ func (AnthropicIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 		stopReason = "other"
 	}
 
+	payload := map[string]any{
+		"text":        text,
+		"stop_reason": stopReason,
+		"usage":       normalizeUsage(response["usage"]),
+	}
+	if len(reasoning) > 0 {
+		payload["reasoning"] = reasoning
+	}
+
 	result := []EventArgs{{
-		Type: EventAssistantMessage,
-		Payload: map[string]any{
-			"text":        text,
-			"stop_reason": stopReason,
-			"usage":       normalizeUsage(response["usage"]),
-		},
+		Type:    EventAssistantMessage,
+		Payload: payload,
 	}}
 	result = append(result, events...)
 	return result, nil
