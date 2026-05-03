@@ -2,6 +2,7 @@ package harnas
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -110,10 +111,18 @@ func (g StaleReadGuard) WrapRead(handler ToolHandler) ToolHandler {
 }
 
 func (g StaleReadGuard) WrapEdit(handler ToolHandler) ToolHandler {
+	return g.wrapMutating(handler, "edit")
+}
+
+func (g StaleReadGuard) WrapWrite(handler ToolHandler) ToolHandler {
+	return g.wrapMutating(handler, "write")
+}
+
+func (g StaleReadGuard) wrapMutating(handler ToolHandler, action string) ToolHandler {
 	return func(args map[string]any) (string, error) {
 		path := stringValue(args["path"])
 		if path != "" && g.Log != nil {
-			if err := g.check(path); err != nil {
+			if err := g.check(path, action); err != nil {
 				return "", err
 			}
 		}
@@ -121,7 +130,7 @@ func (g StaleReadGuard) WrapEdit(handler ToolHandler) ToolHandler {
 	}
 }
 
-func (g StaleReadGuard) check(path string) error {
+func (g StaleReadGuard) check(path string, action string) error {
 	lastHash := ""
 	for _, event := range g.Log.Events() {
 		if event.Type != EventAnnotation || event.Payload["kind"] != "stale_read_guard.hash" {
@@ -133,8 +142,18 @@ func (g StaleReadGuard) check(path string) error {
 		}
 	}
 	if lastHash == "" {
+		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return err
+		}
 		if g.RequireRead || g.Strict {
-			return fmt.Errorf("stale read guard: %s was not read before edit", path)
+			return fmt.Errorf(
+				"StaleReadGuard: refuse to %s %s - file exists on disk but has not been read "+
+					"in this session. Call read_file(%s) first to capture its current state, "+
+					"then retry the %s.",
+				action, path, path, action,
+			)
 		}
 		return nil
 	}
@@ -143,7 +162,11 @@ func (g StaleReadGuard) check(path string) error {
 		return err
 	}
 	if sha256Hex(string(content)) != lastHash {
-		return fmt.Errorf("stale read guard: %s changed since last read", path)
+		return fmt.Errorf(
+			"StaleReadGuard: refuse to %s %s - disk content has changed since the last "+
+				"read in this session. Call read_file(%s) again to refresh, then retry the %s.",
+			action, path, path, action,
+		)
 	}
 	return nil
 }
