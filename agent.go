@@ -55,15 +55,7 @@ func (a *Agent) Stream(text string, onDelta func(Event)) (Response, error) {
 	a.Session.Log.Append(EventUserMessage, map[string]any{"text": text})
 	loop := a.Loaded.Loop()
 	loop.Session = a.Session
-	original := loop.StreamProvider
-	loop.StreamProvider = streamProviderFunc(func(request map[string]any, emit func(EventArgs)) error {
-		return original.Call(request, func(args EventArgs) {
-			event := a.Session.Log.Append(args.Type, args.Payload)
-			if isDeltaEvent(event.Type) && onDelta != nil {
-				onDelta(event)
-			}
-		})
-	})
+	loop.OnStreamEvent = onDelta
 	reason, err := loop.Run()
 	if err != nil {
 		return Response{}, err
@@ -75,12 +67,6 @@ func (a *Agent) Stream(text string, onDelta func(Event)) (Response, error) {
 		stopReason = reason
 	}
 	return Response{Text: reply, StopReason: stopReason, Log: a.Session.Log}, nil
-}
-
-type streamProviderFunc func(map[string]any, func(EventArgs)) error
-
-func (f streamProviderFunc) Call(request map[string]any, emit func(EventArgs)) error {
-	return f(request, emit)
 }
 
 func isDeltaEvent(eventType EventType) bool {

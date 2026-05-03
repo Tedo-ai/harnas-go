@@ -1,6 +1,8 @@
 package harnas
 
 import (
+	"encoding/json"
+	"os"
 	"reflect"
 	"sync"
 )
@@ -99,4 +101,39 @@ func funcEqual(left, right ObservationSubscriber) bool {
 
 func funcValuePointer(fn any) uintptr {
 	return reflect.ValueOf(fn).Pointer()
+}
+
+type DeltaLogger struct {
+	path  string
+	mu    sync.Mutex
+	index int
+}
+
+func NewDeltaLogger(path string, observation *Observation) *DeltaLogger {
+	logger := &DeltaLogger{path: path}
+	observation.Subscribe(logger.Call)
+	return logger
+}
+
+func (l *DeltaLogger) Call(eventName string, payload map[string]any) {
+	if eventName != "stream_event" {
+		return
+	}
+	event, ok := payload["event"].(Event)
+	if !ok || !isStreamObservationEvent(event.Type) {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	file, err := os.OpenFile(l.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_ = json.NewEncoder(file).Encode(map[string]any{
+		"index":   l.index,
+		"type":    string(event.Type),
+		"payload": event.Payload,
+	})
+	l.index++
 }

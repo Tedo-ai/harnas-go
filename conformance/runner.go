@@ -41,13 +41,27 @@ func Run(fixtureDir string) (Result, error) {
 		return Result{}, err
 	}
 
-	session, err := RunSession(manifest, filepath.Join(fixtureDir, scriptPath), inputs, nil)
+	expectedDeltasPath := filepath.Join(fixtureDir, "expected-deltas.jsonl")
+	session, actualDeltas, err := RunSessionWithDeltaPath(
+		manifest,
+		filepath.Join(fixtureDir, scriptPath),
+		inputs,
+		nil,
+		expectedDeltasPath,
+	)
 	if err != nil {
 		return Result{}, err
 	}
 
 	actual := session.Log.Events()
 	diff := FirstDiff(actual, expected)
+	if diff == "" && fileExists(expectedDeltasPath) {
+		expectedDeltas, err := ReadDeltaExpected(expectedDeltasPath)
+		if err != nil {
+			return Result{}, err
+		}
+		diff = FirstDeltaDiff(actualDeltas, expectedDeltas)
+	}
 	return Result{
 		Fixture:  fixture,
 		Passed:   diff == "",
@@ -62,10 +76,26 @@ func LoadManifest(fixtureDir string) (harnas.Manifest, error) {
 }
 
 func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session) (*harnas.Session, error) {
+	session, _, err := RunSessionWithDeltaPath(manifest, scriptPath, inputs, session, "")
+	return session, err
+}
+
+func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session, expectedDeltasPath string) (*harnas.Session, []DeltaRow, error) {
 	streaming := filepath.Base(scriptPath) == "provider-script-stream.json" || filepath.Base(scriptPath) == "phase-1-provider-script-stream.json" || filepath.Base(scriptPath) == "phase-2-provider-script-stream.json"
 
 	if session == nil {
 		session = harnas.CreateSession(map[string]any{"manifest_name": manifest.Name})
+	}
+	var deltaPath string
+	if expectedDeltasPath != "" && fileExists(expectedDeltasPath) {
+		file, err := os.CreateTemp("", "harnas-deltas-*.jsonl")
+		if err != nil {
+			return nil, nil, err
+		}
+		deltaPath = file.Name()
+		file.Close()
+		defer os.Remove(deltaPath)
+		harnas.NewDeltaLogger(deltaPath, session.Observation)
 	}
 	registry := harnas.NewRegistry()
 	for _, tool := range manifest.Tools {
@@ -78,7 +108,7 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 	}
 	strategies, err := harnas.BuildStrategies(manifest.Strategies, nil)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	for _, strategy := range strategies {
 		strategy.Install(session)
@@ -101,13 +131,13 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 	if streaming {
 		var streams [][]map[string]any
 		if err := readJSON(scriptPath, &streams); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		loop.StreamProvider = NewScriptedStreamProvider(streams)
 	} else {
 		var script []map[string]any
 		if err := readJSON(scriptPath, &script); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		loop.Provider = NewScriptedProvider(script)
 	}
@@ -131,7 +161,7 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 				parent := session
 				forked := parent.Fork(atSeq)
 				if err := verifyFork(parent, forked, atSeq); err != nil {
-					return nil, err
+					return nil, nil, err
 				}
 				session = forked
 				loop.Session = forked
@@ -141,11 +171,19 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 		}
 		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
 		if _, err := loop.Run(); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 	}
 
-	return session, nil
+	deltas := []DeltaRow{}
+	if deltaPath != "" {
+		var err error
+		deltas, err = ReadDeltaExpected(deltaPath)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+	return session, deltas, nil
 }
 
 func verifyFork(parent, forked *harnas.Session, atSeq int) error {
@@ -230,6 +268,45 @@ func ReadExpected(path string) ([]harnas.Event, error) {
 		events = append(events, event)
 	}
 	return events, nil
+}
+
+type DeltaRow struct {
+	Index   float64        `json:"index"`
+	Type    string         `json:"type"`
+	Payload map[string]any `json:"payload"`
+}
+
+func ReadDeltaExpected(path string) ([]DeltaRow, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitJSONLines(data)
+	rows := make([]DeltaRow, 0, len(lines))
+	for _, line := range lines {
+		var row DeltaRow
+		if err := json.Unmarshal(line, &row); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func FirstDeltaDiff(actual, expected []DeltaRow) string {
+	if reflect.DeepEqual(actual, expected) {
+		return ""
+	}
+	limit := len(actual)
+	if len(expected) < limit {
+		limit = len(expected)
+	}
+	for i := range limit {
+		if !reflect.DeepEqual(actual[i], expected[i]) {
+			return fmt.Sprintf("delta %d actual=%#v expected=%#v", i, actual[i], expected[i])
+		}
+	}
+	return fmt.Sprintf("delta length actual=%d expected=%d", len(actual), len(expected))
 }
 
 func splitJSONLines(data []byte) [][]byte {

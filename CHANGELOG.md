@@ -4,6 +4,31 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-05-03
+
+### Reference implementation (Go)
+
+#### Changed
+
+- Streaming transport events now emit on the Session Observation bus
+  and no longer append to the durable Log. Consolidated
+  `assistant_message` / `tool_use` events still append as before.
+- `Agent.Stream` and `bin/harnas chat` now stream from the AgentLoop
+  callback rather than re-appending provider events.
+- Conformance now passes 24/24 fixtures, including the
+  `with-delta-logger-sidecar` fixture.
+
+#### Added
+
+- Added `DeltaLogger` for opt-in sidecar JSONL persistence of
+  streaming transport events.
+
+#### Fixed
+
+- OpenAI live streaming requests include
+  `stream_options: {"include_usage": true}`, preserving non-zero usage
+  in the consolidated assistant message.
+
 ## [0.7.0] — 2026-05-02
 
 ### Reference implementation (Go)

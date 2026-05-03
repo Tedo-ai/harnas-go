@@ -16,6 +16,7 @@ type AgentLoop struct {
 	Runner         *Runner
 	RetryPolicy    *RetryPolicy
 	MaxTurns       int
+	OnStreamEvent  func(Event)
 }
 
 func (l AgentLoop) Run() (string, error) {
@@ -97,7 +98,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 	})
 	if l.StreamProvider != nil {
 		err := l.StreamProvider.Call(request, func(event EventArgs) {
-			l.Session.Log.Append(event.Type, event.Payload)
+			l.handleStreamEvent(event)
 		})
 		if err != nil {
 			l.Session.Observation.Emit("provider_failed", map[string]any{
@@ -146,6 +147,33 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 		}
 	}
 	return nil
+}
+
+func (l AgentLoop) handleStreamEvent(args EventArgs) {
+	if isStreamObservationEvent(args.Type) {
+		event := Event{Seq: -1, ID: "stream", Type: args.Type, Payload: args.Payload}
+		l.Session.Observation.Emit("stream_event", map[string]any{"event": event})
+		if l.OnStreamEvent != nil && isDeltaEvent(args.Type) {
+			l.OnStreamEvent(event)
+		}
+		return
+	}
+	l.Session.Log.Append(args.Type, args.Payload)
+}
+
+func isStreamObservationEvent(eventType EventType) bool {
+	switch eventType {
+	case EventAssistantTurnStarted,
+		EventAssistantTextDelta,
+		EventToolUseBegin,
+		EventToolUseArgumentDelta,
+		EventToolUseEnd,
+		EventAssistantTurnDone,
+		EventAssistantTurnFailed:
+		return true
+	default:
+		return false
+	}
 }
 
 func projectionName(projection Projection) string {

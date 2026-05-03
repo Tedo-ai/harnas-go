@@ -53,6 +53,7 @@ func NewOpenAIStreamProvider(apiKey string) OpenAIStreamProvider {
 func (p OpenAIStreamProvider) Call(request map[string]any, emit func(EventArgs)) error {
 	body := copyMap(request)
 	body["stream"] = true
+	body["stream_options"] = map[string]any{"include_usage": true}
 	endpoint := p.Endpoint
 	if endpoint == "" {
 		endpoint = OpenAIEndpoint
