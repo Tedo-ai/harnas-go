@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strings"
 )
 
 const SupportedManifestVersion = "0.1"
@@ -31,6 +32,7 @@ type Manifest struct {
 	Provider   ProviderSpec   `json:"provider"`
 	Tools      []ToolSpec     `json:"tools"`
 	Strategies []StrategySpec `json:"strategies"`
+	Hooks      []HookSpec     `json:"hooks,omitempty"`
 }
 
 type ProviderSpec struct {
@@ -47,8 +49,16 @@ type ToolSpec struct {
 }
 
 type StrategySpec struct {
-	Name   string         `json:"name"`
-	Config map[string]any `json:"config,omitempty"`
+	Name    string         `json:"name"`
+	Config  map[string]any `json:"config,omitempty"`
+	OnError string         `json:"on_error,omitempty"`
+}
+
+type HookSpec struct {
+	Point   string         `json:"point"`
+	Handler string         `json:"handler"`
+	Config  map[string]any `json:"config,omitempty"`
+	OnError string         `json:"on_error,omitempty"`
 }
 
 type ToolHandler func(map[string]any) (string, error)
@@ -57,6 +67,7 @@ type ApprovalHandler func(Event) bool
 type ManifestOptions struct {
 	ToolHandlers     map[string]ToolHandler
 	StrategyHandlers map[string]ApprovalHandler
+	HookHandlers     map[string]HookHandler
 	Providers        map[string]Provider
 	StreamProviders  map[string]StreamProvider
 	APIKeys          map[string]string
@@ -71,10 +82,19 @@ type LoadedManifest struct {
 	Ingestor       Ingestor
 	Registry       *Registry
 	Strategies     []StrategyInstallation
+	Hooks          []HookInstallation
 }
 
 type StrategyInstallation interface {
 	Install(session *Session)
+}
+
+type HookInstallation struct {
+	Point   string
+	Name    string
+	Handler HookHandler
+	Config  map[string]any
+	OnError string
 }
 
 func LoadManifest(source string, options ManifestOptions) (*LoadedManifest, error) {
@@ -131,6 +151,11 @@ func validateManifestKeys(data []byte) error {
 	if err := validateStrategyKeys(raw["strategies"]); err != nil {
 		return err
 	}
+	if rawHooks, ok := raw["hooks"]; ok {
+		if err := validateHookKeys(rawHooks); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
@@ -175,6 +200,21 @@ func validateStrategyKeys(raw json.RawMessage) error {
 	return nil
 }
 
+func validateHookKeys(raw json.RawMessage) error {
+	var hooks []map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &hooks); err != nil {
+		return validationError("%s", err.Error())
+	}
+	for index, hook := range hooks {
+		for _, key := range []string{"point", "handler"} {
+			if _, ok := hook[key]; !ok {
+				return validationError("hooks[%d] missing required field %q", index, key)
+			}
+		}
+	}
+	return nil
+}
+
 func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest, error) {
 	if err := ValidateManifest(manifest); err != nil {
 		return nil, err
@@ -203,6 +243,10 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
+	hooks, err := BuildHooks(manifest.Hooks, options.HookHandlers)
+	if err != nil {
+		return nil, err
+	}
 	return &LoadedManifest{
 		Name:           manifest.Name,
 		Session:        CreateSession(map[string]any{"manifest_name": manifest.Name}),
@@ -212,12 +256,16 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 		Ingestor:       ingestor,
 		Registry:       registry,
 		Strategies:     strategies,
+		Hooks:          hooks,
 	}, nil
 }
 
 func (l *LoadedManifest) InstallStrategies() {
 	for _, strategy := range l.Strategies {
 		strategy.Install(l.Session)
+	}
+	for _, hook := range l.Hooks {
+		hook.Install(l.Session)
 	}
 }
 
@@ -265,6 +313,9 @@ func ValidateManifest(manifest Manifest) error {
 	if err := validateStrategies(manifest.Strategies); err != nil {
 		return err
 	}
+	if err := validateHooks(manifest.Hooks); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -297,8 +348,33 @@ func validateStrategies(strategies []StrategySpec) error {
 		if !knownStrategy(strategy.Name) {
 			return unknownStrategyError("unknown canonical strategy: %q", strategy.Name)
 		}
+		if err := validateOnError(strategy.OnError); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func validateHooks(hooks []HookSpec) error {
+	for _, hook := range hooks {
+		if hook.Point == "" {
+			return validationError("hook.point must not be empty")
+		}
+		if hook.Handler == "" {
+			return validationError("hook.handler must not be empty")
+		}
+		if err := validateOnError(hook.OnError); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validateOnError(value string) error {
+	if value == "" || value == "isolate" || value == "fail_turn" {
+		return nil
+	}
+	return validationError("on_error must be \"isolate\" or \"fail_turn\"")
 }
 
 func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry, error) {
@@ -336,54 +412,136 @@ func BuildStrategiesWithRuntime(
 	for _, spec := range specs {
 		switch spec.Name {
 		case "Compaction::MarkerTail":
-			strategies = append(strategies, MarkerTail{
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: MarkerTail{
 				MaxMessages: intValue(spec.Config["max_messages"]),
 				KeepRecent:  intValue(spec.Config["keep_recent"]),
-			})
+			}})
 		case "Compaction::ToolOutputCap":
-			strategies = append(strategies, ToolOutputCap{
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: ToolOutputCap{
 				MaxBytes:      intValue(spec.Config["max_bytes"]),
 				PrefixBytes:   intValue(spec.Config["prefix_bytes"]),
 				SummaryFormat: stringValue(spec.Config["summary_format"]),
-			})
+			}})
 		case "Compaction::TokenMarkerTail":
-			strategies = append(strategies, TokenMarkerTail{
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: TokenMarkerTail{
 				MaxTokens:     intValue(spec.Config["max_tokens"]),
 				Threshold:     floatValue(spec.Config["threshold"]),
 				KeepRecent:    intValue(spec.Config["keep_recent"]),
 				SummaryFormat: stringValue(spec.Config["summary_format"]),
-			})
+			}})
 		case "Compaction::SummaryTail":
-			strategies = append(strategies, SummaryTail{
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: SummaryTail{
 				Projection:  projection,
 				Provider:    provider,
 				Ingestor:    ingestor,
 				MaxMessages: intValue(spec.Config["max_messages"]),
 				KeepRecent:  intValue(spec.Config["keep_recent"]),
 				Prompt:      stringValue(spec.Config["prompt"]),
-			})
+			}})
 		case "Permission::DenyByName":
-			strategies = append(strategies, DenyByName{
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: DenyByName{
 				Names:        stringSlice(spec.Config["names"]),
 				ReasonFormat: stringValue(spec.Config["reason_format"]),
-			})
+			}})
 		case "Permission::AlwaysAllow":
-			strategies = append(strategies, AlwaysAllow{})
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: AlwaysAllow{}})
 		case "Permission::HumanApproval":
 			name := stringValue(spec.Config["prompt"])
 			handler := handlers[name]
 			if handler == nil {
 				return nil, unresolvedHandlerError("strategy handler %q not in strategy_handlers", name)
 			}
-			strategies = append(strategies, HumanApproval{
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: HumanApproval{
 				Prompt:       handler,
 				DenialReason: stringValue(spec.Config["denial_reason"]),
-			})
+			}})
 		default:
 			return nil, unknownStrategyError("unknown canonical strategy: %q", spec.Name)
 		}
 	}
 	return strategies, nil
+}
+
+type NamedStrategyInstallation struct {
+	Name    string
+	OnError string
+	Inner   StrategyInstallation
+}
+
+func (n NamedStrategyInstallation) Install(session *Session) {
+	before := session.Hooks.Handlers()
+	n.Inner.Install(session)
+	markNewHandlers(session.Hooks, before, HookOptions{
+		OnError: HookErrorPolicy(onErrorDefault(n.OnError)),
+		Name:    n.Name,
+		Source:  "strategy",
+	})
+}
+
+func BuildHooks(specs []HookSpec, handlers map[string]HookHandler) ([]HookInstallation, error) {
+	installations := make([]HookInstallation, 0, len(specs))
+	for _, spec := range specs {
+		handler := HookHandler(nil)
+		if handlers != nil {
+			handler = handlers[spec.Handler]
+		}
+		if handler == nil {
+			return nil, unresolvedHandlerError("hook handler %q not in hook_handlers", spec.Handler)
+		}
+		installations = append(installations, HookInstallation{
+			Point:   strings.TrimPrefix(spec.Point, ":"),
+			Name:    spec.Handler,
+			Handler: handler,
+			Config:  spec.Config,
+			OnError: spec.OnError,
+		})
+	}
+	return installations, nil
+}
+
+func (h HookInstallation) Install(session *Session) {
+	config := h.Config
+	session.Hooks.OnWithOptions(h.Point, func(ctx map[string]any) any {
+		if ctx == nil {
+			ctx = map[string]any{}
+		}
+		ctx["config"] = config
+		return h.Handler(ctx)
+	}, HookOptions{
+		OnError: HookErrorPolicy(onErrorDefault(h.OnError)),
+		Name:    h.Name,
+		Source:  "hook",
+	})
+}
+
+func markNewHandlers(hooks *Hooks, before map[string][]HookHandler, options HookOptions) {
+	after := hooks.Handlers()
+	for point, handlers := range after {
+		previous := before[point]
+		for _, handler := range handlers {
+			if hookSliceContains(previous, handler) {
+				continue
+			}
+			hooks.Off(point, handler)
+			hooks.OnWithOptions(point, handler, options)
+		}
+	}
+}
+
+func hookSliceContains(handlers []HookHandler, target HookHandler) bool {
+	for _, handler := range handlers {
+		if funcEqualHook(handler, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func onErrorDefault(value string) string {
+	if value == "" {
+		return "isolate"
+	}
+	return value
 }
 
 func ProjectionFor(provider ProviderSpec, system string) Projection {

@@ -13,8 +13,10 @@ type MarkerTail struct {
 
 func (m MarkerTail) Install(session *Session) {
 	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
-		m.OnPreProjection(session)
-		return nil
+		return observeStrategy(session, "Compaction::MarkerTail", "pre_projection", func() any {
+			m.OnPreProjection(session)
+			return nil
+		})
 	})
 }
 
@@ -65,8 +67,10 @@ type ToolOutputCap struct {
 
 func (t ToolOutputCap) Install(session *Session) {
 	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
-		t.OnPreProjection(session)
-		return nil
+		return observeStrategy(session, "Compaction::ToolOutputCap", "pre_projection", func() any {
+			t.OnPreProjection(session)
+			return nil
+		})
 	})
 }
 
@@ -201,8 +205,10 @@ type TokenMarkerTail struct {
 
 func (t TokenMarkerTail) Install(session *Session) {
 	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
-		t.OnPreProjection(session)
-		return nil
+		return observeStrategy(session, "Compaction::TokenMarkerTail", "pre_projection", func() any {
+			t.OnPreProjection(session)
+			return nil
+		})
 	})
 }
 
@@ -258,8 +264,10 @@ type SummaryTail struct {
 
 func (s SummaryTail) Install(session *Session) {
 	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
-		s.OnPreProjection(session)
-		return nil
+		return observeStrategy(session, "Compaction::SummaryTail", "pre_projection", func() any {
+			s.OnPreProjection(session)
+			return nil
+		})
 	})
 }
 
@@ -398,14 +406,48 @@ type HumanApproval struct {
 
 func (h HumanApproval) Install(session *Session) {
 	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
-		toolUse, _ := ctx["tool_use"].(Event)
-		if h.Prompt != nil && h.Prompt(toolUse) {
-			return map[string]any{"allow": true}
-		}
-		reason := h.DenialReason
-		if reason == "" {
-			reason = "human declined"
-		}
-		return map[string]any{"allow": false, "reason": reason}
+		return observeStrategy(session, "Permission::HumanApproval", "pre_tool_use", func() any {
+			toolUse, _ := ctx["tool_use"].(Event)
+			if h.Prompt != nil && h.Prompt(toolUse) {
+				return map[string]any{"allow": true}
+			}
+			reason := h.DenialReason
+			if reason == "" {
+				reason = "human declined"
+			}
+			return map[string]any{"allow": false, "reason": reason}
+		})
 	})
+}
+
+func observeStrategy(session *Session, name, hookPoint string, body func() any) (result any) {
+	session.Observation.Emit("strategy_started", map[string]any{
+		"name":       name,
+		"hook_point": hookPoint,
+	})
+	before := len(session.Log.Events())
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			session.Observation.Emit("strategy_completed", map[string]any{
+				"name":       name,
+				"hook_point": hookPoint,
+				"effect":     "error",
+			})
+			panic(recovered)
+		}
+		effect := "noop"
+		if len(session.Log.Events()) > before {
+			effect = "mutated"
+		} else if decision, ok := result.(map[string]any); ok {
+			if allow, _ := decision["allow"].(bool); !allow {
+				effect = "refused"
+			}
+		}
+		session.Observation.Emit("strategy_completed", map[string]any{
+			"name":       name,
+			"hook_point": hookPoint,
+			"effect":     effect,
+		})
+	}()
+	return body()
 }

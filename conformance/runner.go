@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"time"
 
 	harnas "github.com/Tedo-ai/harnas-go"
@@ -42,12 +43,14 @@ func Run(fixtureDir string) (Result, error) {
 	}
 
 	expectedDeltasPath := filepath.Join(fixtureDir, "expected-deltas.jsonl")
-	session, actualDeltas, err := RunSessionWithDeltaPath(
+	expectedStrategyEventsPath := filepath.Join(fixtureDir, "expected-strategy-events.jsonl")
+	session, actualDeltas, actualStrategyEvents, err := RunSessionWithSidecars(
 		manifest,
 		filepath.Join(fixtureDir, scriptPath),
 		inputs,
 		nil,
 		expectedDeltasPath,
+		expectedStrategyEventsPath,
 	)
 	if err != nil {
 		return Result{}, err
@@ -61,6 +64,13 @@ func Run(fixtureDir string) (Result, error) {
 			return Result{}, err
 		}
 		diff = FirstDeltaDiff(actualDeltas, expectedDeltas)
+	}
+	if diff == "" && fileExists(expectedStrategyEventsPath) {
+		expectedStrategyEvents, err := ReadStrategyEventExpected(expectedStrategyEventsPath)
+		if err != nil {
+			return Result{}, err
+		}
+		diff = FirstStrategyEventDiff(actualStrategyEvents, expectedStrategyEvents)
 	}
 	return Result{
 		Fixture:  fixture,
@@ -81,6 +91,11 @@ func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, sessi
 }
 
 func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session, expectedDeltasPath string) (*harnas.Session, []DeltaRow, error) {
+	session, deltas, _, err := RunSessionWithSidecars(manifest, scriptPath, inputs, session, expectedDeltasPath, "")
+	return session, deltas, err
+}
+
+func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session, expectedDeltasPath string, expectedStrategyEventsPath string) (*harnas.Session, []DeltaRow, []StrategyEventRow, error) {
 	streaming := filepath.Base(scriptPath) == "provider-script-stream.json" || filepath.Base(scriptPath) == "phase-1-provider-script-stream.json" || filepath.Base(scriptPath) == "phase-2-provider-script-stream.json"
 
 	if session == nil {
@@ -90,12 +105,23 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 	if expectedDeltasPath != "" && fileExists(expectedDeltasPath) {
 		file, err := os.CreateTemp("", "harnas-deltas-*.jsonl")
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		deltaPath = file.Name()
 		file.Close()
 		defer os.Remove(deltaPath)
 		harnas.NewDeltaLogger(deltaPath, session.Observation)
+	}
+	var strategyEventsPath string
+	if expectedStrategyEventsPath != "" && fileExists(expectedStrategyEventsPath) {
+		file, err := os.CreateTemp("", "harnas-strategy-events-*.jsonl")
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		strategyEventsPath = file.Name()
+		file.Close()
+		defer os.Remove(strategyEventsPath)
+		NewStrategyEventCollector(strategyEventsPath, session.Observation)
 	}
 	registry := harnas.NewRegistry()
 	for _, tool := range manifest.Tools {
@@ -108,10 +134,13 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 	}
 	strategies, err := harnas.BuildStrategies(manifest.Strategies, nil)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	for _, strategy := range strategies {
 		strategy.Install(session)
+	}
+	if err := installHooks(session, manifest.Hooks); err != nil {
+		return nil, nil, nil, err
 	}
 
 	loop := harnas.AgentLoop{
@@ -131,13 +160,13 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 	if streaming {
 		var streams [][]map[string]any
 		if err := readJSON(scriptPath, &streams); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		loop.StreamProvider = NewScriptedStreamProvider(streams)
 	} else {
 		var script []map[string]any
 		if err := readJSON(scriptPath, &script); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		loop.Provider = NewScriptedProvider(script)
 	}
@@ -161,7 +190,7 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 				parent := session
 				forked := parent.Fork(atSeq)
 				if err := verifyFork(parent, forked, atSeq); err != nil {
-					return nil, nil, err
+					return nil, nil, nil, err
 				}
 				session = forked
 				loop.Session = forked
@@ -171,7 +200,7 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 		}
 		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
 		if _, err := loop.Run(); err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
 
@@ -180,10 +209,73 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 		var err error
 		deltas, err = ReadDeltaExpected(deltaPath)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 	}
-	return session, deltas, nil
+	strategyEvents := []StrategyEventRow{}
+	if strategyEventsPath != "" {
+		var err error
+		strategyEvents, err = ReadStrategyEventExpected(strategyEventsPath)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	return session, deltas, strategyEvents, nil
+}
+
+func installHooks(session *harnas.Session, hooks []harnas.HookSpec) error {
+	handlers := conformanceHookHandlers()
+	for _, hook := range hooks {
+		handler := handlers[hook.Handler]
+		if handler == nil {
+			return fmt.Errorf("hook handler %q not in hook_handlers", hook.Handler)
+		}
+		config := hook.Config
+		session.Hooks.OnWithOptions(strings.TrimPrefix(hook.Point, ":"), func(ctx map[string]any) any {
+			if ctx == nil {
+				ctx = map[string]any{}
+			}
+			ctx["config"] = config
+			return handler(ctx)
+		}, harnas.HookOptions{
+			OnError: harnas.HookErrorPolicy(onErrorDefault(hook.OnError)),
+			Name:    hook.Handler,
+			Source:  "hook",
+		})
+	}
+	return nil
+}
+
+func conformanceHookHandlers() map[string]harnas.HookHandler {
+	return map[string]harnas.HookHandler{
+		"conformance.audit_post_tool_use": func(ctx map[string]any) any {
+			session, _ := ctx["session"].(*harnas.Session)
+			toolUse, _ := ctx["tool_use"].(harnas.Event)
+			toolResult, _ := ctx["tool_result"].(*harnas.Event)
+			resultSeq := 0
+			if toolResult != nil {
+				resultSeq = toolResult.Seq
+			}
+			session.Log.Append(harnas.EventAnnotation, map[string]any{
+				"kind": "conformance.hook",
+				"data": map[string]any{
+					"tool_use_id": toolUse.Payload["id"],
+					"result_seq":  float64(resultSeq),
+				},
+			})
+			return nil
+		},
+		"conformance.raise_hook": func(ctx map[string]any) any {
+			panic("conformance hook failure")
+		},
+	}
+}
+
+func onErrorDefault(value string) string {
+	if value == "" {
+		return "isolate"
+	}
+	return value
 }
 
 func verifyFork(parent, forked *harnas.Session, atSeq int) error {
@@ -307,6 +399,73 @@ func FirstDeltaDiff(actual, expected []DeltaRow) string {
 		}
 	}
 	return fmt.Sprintf("delta length actual=%d expected=%d", len(actual), len(expected))
+}
+
+type StrategyEventRow struct {
+	Index   float64        `json:"index"`
+	Event   string         `json:"event"`
+	Payload map[string]any `json:"payload"`
+}
+
+func ReadStrategyEventExpected(path string) ([]StrategyEventRow, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitJSONLines(data)
+	rows := make([]StrategyEventRow, 0, len(lines))
+	for _, line := range lines {
+		var row StrategyEventRow
+		if err := json.Unmarshal(line, &row); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func FirstStrategyEventDiff(actual, expected []StrategyEventRow) string {
+	if reflect.DeepEqual(actual, expected) {
+		return ""
+	}
+	limit := len(actual)
+	if len(expected) < limit {
+		limit = len(expected)
+	}
+	for i := range limit {
+		if !reflect.DeepEqual(actual[i], expected[i]) {
+			return fmt.Sprintf("strategy event %d actual=%#v expected=%#v", i, actual[i], expected[i])
+		}
+	}
+	return fmt.Sprintf("strategy event length actual=%d expected=%d", len(actual), len(expected))
+}
+
+type StrategyEventCollector struct {
+	path  string
+	index int
+}
+
+func NewStrategyEventCollector(path string, observation *harnas.Observation) *StrategyEventCollector {
+	collector := &StrategyEventCollector{path: path}
+	observation.Subscribe(collector.Call)
+	return collector
+}
+
+func (c *StrategyEventCollector) Call(eventName string, payload map[string]any) {
+	if eventName != "strategy_started" && eventName != "strategy_completed" {
+		return
+	}
+	file, err := os.OpenFile(c.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+	_ = json.NewEncoder(file).Encode(map[string]any{
+		"index":   c.index,
+		"event":   eventName,
+		"payload": payload,
+	})
+	c.index++
 }
 
 func splitJSONLines(data []byte) [][]byte {

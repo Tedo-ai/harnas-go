@@ -12,6 +12,7 @@ const (
 	EventSummary              EventType = "summary"
 	EventAnnotation           EventType = "annotation"
 	EventProviderError        EventType = "provider_error"
+	EventRuntimeError         EventType = "runtime_error"
 	EventAssistantTurnStarted EventType = "assistant_turn_started"
 	EventAssistantTextDelta   EventType = "assistant_text_delta"
 	EventToolUseBegin         EventType = "tool_use_begin"

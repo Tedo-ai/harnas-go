@@ -19,12 +19,22 @@ type AgentLoop struct {
 	OnStreamEvent  func(Event)
 }
 
-func (l AgentLoop) Run() (string, error) {
+func (l AgentLoop) Run() (reason string, err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			if _, ok := recovered.(TurnFailed); ok {
+				reason = "runtime_failed"
+				err = nil
+				return
+			}
+			panic(recovered)
+		}
+	}()
 	maxTurns := l.MaxTurns
 	if maxTurns == 0 {
 		maxTurns = 10
 	}
-	reason := "max_turns_reached"
+	reason = "max_turns_reached"
 	for range maxTurns {
 		stopReason, err := l.runTurn()
 		if err != nil {
@@ -48,6 +58,7 @@ func (l AgentLoop) runTurn() (string, error) {
 	if err != nil {
 		return "", err
 	}
+	l.Session.Hooks.Invoke("post_projection", map[string]any{"session": l.Session, "request": request})
 	l.Session.Observation.Emit("projection_invoked", map[string]any{
 		"projection": projectionName(l.Projection),
 		"log_size":   len(l.Session.Log.Events()),

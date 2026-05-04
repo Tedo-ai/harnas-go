@@ -137,3 +137,71 @@ func (l *DeltaLogger) Call(eventName string, payload map[string]any) {
 	})
 	l.index++
 }
+
+type CostTracker struct {
+	mu             sync.Mutex
+	InputTokens    int
+	OutputTokens   int
+	Turns          int
+	threshold      int
+	onThreshold    func(map[string]int)
+	thresholdFired bool
+}
+
+func NewCostTracker(observation *Observation, threshold int, onThreshold func(map[string]int)) *CostTracker {
+	tracker := &CostTracker{threshold: threshold, onThreshold: onThreshold}
+	observation.Subscribe(tracker.Call)
+	return tracker
+}
+
+func (c *CostTracker) TotalTokens() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.InputTokens + c.OutputTokens
+}
+
+func (c *CostTracker) Usage() map[string]int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.usageLocked()
+}
+
+func (c *CostTracker) Call(eventName string, payload map[string]any) {
+	if eventName != "event_appended" {
+		return
+	}
+	event, ok := payload["event"].(Event)
+	if !ok || event.Type != EventAssistantMessage {
+		return
+	}
+	usage, ok := event.Payload["usage"].(map[string]any)
+	if !ok {
+		return
+	}
+	c.mu.Lock()
+	c.InputTokens += int(asFloat(usage["input_tokens"]))
+	c.OutputTokens += int(asFloat(usage["output_tokens"]))
+	c.Turns++
+	shouldFire := c.threshold > 0 &&
+		!c.thresholdFired &&
+		c.InputTokens+c.OutputTokens >= c.threshold &&
+		c.onThreshold != nil
+	if shouldFire {
+		c.thresholdFired = true
+	}
+	snapshot := c.usageLocked()
+	callback := c.onThreshold
+	c.mu.Unlock()
+	if shouldFire {
+		callback(snapshot)
+	}
+}
+
+func (c *CostTracker) usageLocked() map[string]int {
+	return map[string]int{
+		"input_tokens":  c.InputTokens,
+		"output_tokens": c.OutputTokens,
+		"total_tokens":  c.InputTokens + c.OutputTokens,
+		"turns":         c.Turns,
+	}
+}
