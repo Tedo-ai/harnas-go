@@ -99,7 +99,10 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 	streaming := filepath.Base(scriptPath) == "provider-script-stream.json" || filepath.Base(scriptPath) == "phase-1-provider-script-stream.json" || filepath.Base(scriptPath) == "phase-2-provider-script-stream.json"
 
 	if session == nil {
-		session = harnas.CreateSession(map[string]any{"manifest_name": manifest.Name})
+		session = harnas.CreateSession(map[string]any{
+			"manifest_name": manifest.Name,
+			"manifest":      manifestSnapshot(manifest),
+		})
 	}
 	var deltaPath string
 	if expectedDeltasPath != "" && fileExists(expectedDeltasPath) {
@@ -130,6 +133,7 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 			Handler:     tool.Handler,
 			Description: tool.Description,
 			InputSchema: tool.InputSchema,
+			Config:      tool.Config,
 		})
 	}
 	strategies, err := harnas.BuildStrategies(manifest.Strategies, nil)
@@ -196,6 +200,28 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 				loop.Session = forked
 				continue
 			}
+			if _, ok := action["save_load"]; ok {
+				file, err := os.CreateTemp("", "harnas-session-*.jsonl")
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				path := file.Name()
+				file.Close()
+				defer os.Remove(path)
+				if err := session.Save(path); err != nil {
+					return nil, nil, nil, err
+				}
+				reloaded, err := harnas.LoadSession(path)
+				if err != nil {
+					return nil, nil, nil, err
+				}
+				if !reflect.DeepEqual(reloaded.Metadata["manifest"], manifestSnapshot(manifest)) {
+					return nil, nil, nil, fmt.Errorf("manifest snapshot mismatch")
+				}
+				session = reloaded
+				loop.Session = reloaded
+				continue
+			}
 			input = action["user"]
 		}
 		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
@@ -221,6 +247,13 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		}
 	}
 	return session, deltas, strategyEvents, nil
+}
+
+func manifestSnapshot(manifest harnas.Manifest) map[string]any {
+	data, _ := json.Marshal(manifest)
+	out := map[string]any{}
+	_ = json.Unmarshal(data, &out)
+	return out
 }
 
 func installHooks(session *harnas.Session, hooks []harnas.HookSpec) error {

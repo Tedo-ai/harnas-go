@@ -11,7 +11,9 @@ type Tool struct {
 	Handler     string
 	Description string
 	InputSchema map[string]any
+	Config      map[string]any
 	Call        func(map[string]any) (string, error)
+	CallConfig  func(map[string]any, map[string]any) (string, error)
 }
 
 type Registry struct {
@@ -73,6 +75,36 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 			"tool_use_id": id,
 			"output":      nil,
 			"error":       "RuntimeError: conformance tool error",
+		})
+		return
+	}
+	if tool.Handler == "conformance.echo_config" {
+		config := tool.Config
+		if config == nil {
+			config = map[string]any{}
+		}
+		encoded, _ := json.Marshal(config)
+		log.Append(EventToolResult, map[string]any{
+			"tool_use_id": id,
+			"output":      fmt.Sprintf("[conformance config: %s]", string(encoded)),
+			"error":       nil,
+		})
+		return
+	}
+	if tool.CallConfig != nil {
+		output, err := tool.CallConfig(args, tool.Config)
+		if err != nil {
+			log.Append(EventToolResult, map[string]any{
+				"tool_use_id": id,
+				"output":      nil,
+				"error":       err.Error(),
+			})
+			return
+		}
+		log.Append(EventToolResult, map[string]any{
+			"tool_use_id": id,
+			"output":      output,
+			"error":       nil,
 		})
 		return
 	}

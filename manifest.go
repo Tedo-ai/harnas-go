@@ -46,6 +46,7 @@ type ToolSpec struct {
 	Handler     string         `json:"handler"`
 	Description string         `json:"description"`
 	InputSchema map[string]any `json:"input_schema"`
+	Config      map[string]any `json:"config,omitempty"`
 }
 
 type StrategySpec struct {
@@ -62,15 +63,17 @@ type HookSpec struct {
 }
 
 type ToolHandler func(map[string]any) (string, error)
+type ConfiguredToolHandler func(map[string]any, map[string]any) (string, error)
 type ApprovalHandler func(Event) bool
 
 type ManifestOptions struct {
-	ToolHandlers     map[string]ToolHandler
-	StrategyHandlers map[string]ApprovalHandler
-	HookHandlers     map[string]HookHandler
-	Providers        map[string]Provider
-	StreamProviders  map[string]StreamProvider
-	APIKeys          map[string]string
+	ToolHandlers       map[string]ToolHandler
+	ConfiguredHandlers map[string]ConfiguredToolHandler
+	StrategyHandlers   map[string]ApprovalHandler
+	HookHandlers       map[string]HookHandler
+	Providers          map[string]Provider
+	StreamProviders    map[string]StreamProvider
+	APIKeys            map[string]string
 }
 
 type LoadedManifest struct {
@@ -219,7 +222,11 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err := ValidateManifest(manifest); err != nil {
 		return nil, err
 	}
-	registry, err := BuildRegistry(manifest.Tools, options.ToolHandlers)
+	registry, err := BuildRegistryWithConfigured(
+		manifest.Tools,
+		options.ToolHandlers,
+		options.ConfiguredHandlers,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -248,8 +255,11 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 		return nil, err
 	}
 	return &LoadedManifest{
-		Name:           manifest.Name,
-		Session:        CreateSession(map[string]any{"manifest_name": manifest.Name}),
+		Name: manifest.Name,
+		Session: CreateSession(map[string]any{
+			"manifest_name": manifest.Name,
+			"manifest":      manifestSnapshot(manifest),
+		}),
 		Projection:     projection,
 		Provider:       provider,
 		StreamProvider: streamProvider,
@@ -378,10 +388,21 @@ func validateOnError(value string) error {
 }
 
 func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry, error) {
+	return BuildRegistryWithConfigured(specs, handlers, nil)
+}
+
+func BuildRegistryWithConfigured(specs []ToolSpec, handlers map[string]ToolHandler, configured map[string]ConfiguredToolHandler) (*Registry, error) {
 	registry := NewRegistry()
 	for _, spec := range specs {
-		handler, ok := handlers[spec.Handler]
-		if !ok {
+		var handler ToolHandler
+		if handlers != nil {
+			handler = handlers[spec.Handler]
+		}
+		var configuredHandler ConfiguredToolHandler
+		if configured != nil {
+			configuredHandler = configured[spec.Handler]
+		}
+		if handler == nil && configuredHandler == nil {
 			return nil, unresolvedHandlerError("tool handler %q not in tool_handlers", spec.Handler)
 		}
 		if err := registry.Register(Tool{
@@ -389,12 +410,21 @@ func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry
 			Handler:     spec.Handler,
 			Description: spec.Description,
 			InputSchema: spec.InputSchema,
+			Config:      spec.Config,
 			Call:        handler,
+			CallConfig:  configuredHandler,
 		}); err != nil {
 			return nil, err
 		}
 	}
 	return registry, nil
+}
+
+func manifestSnapshot(manifest Manifest) map[string]any {
+	data, _ := json.Marshal(manifest)
+	out := map[string]any{}
+	_ = json.Unmarshal(data, &out)
+	return out
 }
 
 func BuildStrategies(specs []StrategySpec, handlers map[string]ApprovalHandler) ([]StrategyInstallation, error) {

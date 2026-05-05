@@ -4,6 +4,16 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+### v0.9.1
+
+#### Added
+
+- Manifest tool entries may now declare opaque `config`; the Go loader
+  stores it in the Session manifest snapshot and exposes it on `Tool`
+  records, with optional configured handler support.
+- Conformance now passes 28/28 fixtures, including
+  `with-tool-config-roundtrip`.
+
 ### Added
 
 - Added manifest-declared hook installation, `on_error: "fail_turn"`
