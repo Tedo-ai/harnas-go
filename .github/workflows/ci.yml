@@ -1,0 +1,24 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout spec
+        uses: actions/checkout@v5
+        with:
+          repository: Tedo-ai/harnas
+          path: harnas-spec
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: test -z "$(gofmt -l .)"
+      - run: go test ./...
+      - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" bin/conformance

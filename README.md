@@ -8,11 +8,11 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.8.0** (2026-05-03). Tracks Harnas spec 0.8.0.
+**Version 0.9.1** (2026-05-05). Tracks Harnas spec 0.9.1.
 
 ## Status
 
-- Agent conformance: 24/24 fixtures passing
+- Agent conformance: 28/28 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
@@ -39,6 +39,18 @@ bin/harnas run manifest.json --input "hello"
 bin/harnas chat manifest.json
 bin/harnas inspect session.jsonl
 bin/smoke-anthropic "say hello in one word"
+```
+
+Library use:
+
+```sh
+go get github.com/Tedo-ai/harnas-go
+```
+
+CLI use from source:
+
+```sh
+go install github.com/Tedo-ai/harnas-go/cmd/harnas@latest
 ```
 
 `bin/conformance` resolves fixtures from a sibling checkout of

@@ -4,6 +4,14 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.9.1] — 2026-05-05
+
+### Trust polish
+
+- Updated README version, fixture-count, and Go install language to
+  match the verified v0.9.1 surface.
+- Added normal push/PR CI for gofmt, `go test`, and conformance.
+
 ### v0.9.1
 
 #### Added
@@ -13,6 +21,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
   records, with optional configured handler support.
 - Conformance now passes 28/28 fixtures, including
   `with-tool-config-roundtrip`.
+
+## [0.9.0] — 2026-05-05
 
 ### Added
 
@@ -168,4 +178,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.9.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.1
+[0.9.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.0
+[0.8.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.8.0
+[0.7.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.7.0
+[0.6.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.6.0
+[0.5.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.4.0
