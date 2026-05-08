@@ -1,5 +1,7 @@
 package harnas
 
+import "encoding/json"
+
 type AnthropicProjection struct {
 	Model     string
 	MaxTokens int
@@ -123,6 +125,38 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 			messages = append(messages, map[string]any{"role": "user", "content": text})
 		case EventAssistantMessage:
 			messages = append(messages, map[string]any{"role": "assistant", "content": text})
+		case EventToolUse:
+			toolCall := map[string]any{
+				"id":   event.Payload["id"],
+				"type": "function",
+				"function": map[string]any{
+					"name":      event.Payload["name"],
+					"arguments": mustJSON(asMap(event.Payload["arguments"])),
+				},
+			}
+			if len(messages) > 0 && messages[len(messages)-1]["role"] == "assistant" {
+				last := messages[len(messages)-1]
+				last["tool_calls"] = append(asMapSlice(last["tool_calls"]), toolCall)
+				if content, ok := last["content"].(string); ok && content == "" {
+					last["content"] = nil
+				}
+			} else {
+				messages = append(messages, map[string]any{
+					"role":       "assistant",
+					"content":    nil,
+					"tool_calls": []map[string]any{toolCall},
+				})
+			}
+		case EventToolResult:
+			content := stringValue(event.Payload["output"])
+			if errText := stringValue(event.Payload["error"]); errText != "" {
+				content = errText
+			}
+			messages = append(messages, map[string]any{
+				"role":         "tool",
+				"tool_call_id": event.Payload["tool_use_id"],
+				"content":      content,
+			})
 		}
 	}
 	request := map[string]any{
@@ -133,6 +167,31 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 		request["tools"] = openAIToolDescriptors(p.Registry)
 	}
 	return request, nil
+}
+
+func mustJSON(value any) string {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func asMapSlice(value any) []map[string]any {
+	switch typed := value.(type) {
+	case []map[string]any:
+		return typed
+	case []any:
+		out := make([]map[string]any, 0, len(typed))
+		for _, item := range typed {
+			if mapped, ok := item.(map[string]any); ok {
+				out = append(out, mapped)
+			}
+		}
+		return out
+	default:
+		return nil
+	}
 }
 
 type GeminiProjection struct {

@@ -4,6 +4,28 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.9.2] — 2026-05-08
+
+### Fixed
+
+- `OpenAIProjection.Project` now folds `:tool_use` events into the
+  preceding assistant message's `tool_calls[]` and emits `:tool_result`
+  as a `role: "tool"` message with `tool_call_id`. Earlier 0.9.x
+  releases silently dropped these events, breaking multi-turn
+  tool-calling against OpenAI-protocol providers (OpenAI, OpenRouter,
+  Together, Grok, Kimi, etc.). Ruby and Python ports already had this;
+  Go was the outlier.
+- `OpenAIProjection.Project` now sets `content: null` on assistant
+  messages that carry `tool_calls[]`, matching the Ruby/Python ports
+  and OpenAI's documented convention.
+
+### Conformance
+
+- The shared `with-tool-call-openai` fixture now asserts on the second
+  projected request (via `expect_request`), proving prior `tool_calls`
+  and the `role: tool` reply survive the round-trip. This is the gap
+  that let the projection bug pass earlier CI.
+
 ## [0.9.1] — 2026-05-05
 
 ### Trust polish
@@ -178,6 +200,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.9.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.2
 [0.9.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.1
 [0.9.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.8.0
