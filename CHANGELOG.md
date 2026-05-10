@@ -4,6 +4,15 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.9.3] — 2026-05-10
+
+### Informative
+
+- Tracks the v0.9.3 spec, which adds non-normative ecosystem
+  conventions for skills and MCP mappings. No Go runtime behavior
+  changes; the `load_skill` built-in and skills-index helper are
+  planned for v0.10.
+
 ## [0.9.2] — 2026-05-08
 
 ### Fixed
@@ -200,6 +209,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.9.3]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.3
 [0.9.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.2
 [0.9.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.1
 [0.9.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.0
