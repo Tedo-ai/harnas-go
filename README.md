@@ -8,18 +8,18 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.9.3** (2026-05-10). Tracks Harnas spec 0.9.3.
+**Version 0.10.0** (2026-05-10). Tracks Harnas spec 0.10.0.
 
 ## Status
 
-- Agent conformance: 28/28 fixtures passing
+- Agent conformance: 30/30 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
 - Streaming HTTP providers for Anthropic, OpenAI, and Gemini
 - Built-in tools: read_file, write_file, edit_file, list_dir, glob,
-  grep, run_shell, fetch_url, with manifest-ready descriptors
+  grep, run_shell, fetch_url, load_skill, with manifest-ready descriptors
 - Tool middleware: Timed, Logged, Retried, RateLimiter, StaleReadGuard
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks and observation bus, MarkerTail, TokenMarkerTail, SummaryTail,

@@ -31,6 +31,15 @@ func BuiltinHandlers() map[string]ToolHandler {
 		"harnas.builtin.grep":       BuiltinGrep,
 		"harnas.builtin.run_shell":  BuiltinRunShell,
 		"harnas.builtin.fetch_url":  BuiltinFetchURL,
+		"harnas.builtin.load_skill": func(args map[string]any) (string, error) {
+			return BuiltinLoadSkill(args, nil)
+		},
+	}
+}
+
+func BuiltinConfiguredHandlers() map[string]ConfiguredToolHandler {
+	return map[string]ConfiguredToolHandler{
+		"harnas.builtin.load_skill": BuiltinLoadSkill,
 	}
 }
 
@@ -133,6 +142,16 @@ func BuiltinDescriptors() []ToolSpec {
 				"type":       "object",
 				"properties": map[string]any{"url": map[string]any{"type": "string"}},
 				"required":   []any{"url"},
+			},
+		},
+		{
+			Name:        "load_skill",
+			Handler:     "harnas.builtin.load_skill",
+			Description: "Load the body of a named skill from the configured skills directory.",
+			InputSchema: map[string]any{
+				"type":       "object",
+				"properties": map[string]any{"name": map[string]any{"type": "string"}},
+				"required":   []any{"name"},
 			},
 		},
 	}
@@ -332,6 +351,45 @@ func BuiltinFetchURL(args map[string]any) (string, error) {
 		return "", err
 	}
 	return fmt.Sprintf("HTTP %d\n%s", response.StatusCode, string(body)), nil
+}
+
+func BuiltinLoadSkill(args map[string]any, config map[string]any) (string, error) {
+	name, err := requiredString(args, "name")
+	if err != nil {
+		return "", err
+	}
+	if !ValidSkillName(name) {
+		return "", fmt.Errorf("RuntimeError: invalid skill name: %s", name)
+	}
+	skillsDir := stringValue(config["skills_dir"])
+	if skillsDir == "" {
+		return "", fmt.Errorf("RuntimeError: missing skills_dir config")
+	}
+	matches, err := filepath.Glob(filepath.Join(skillsDir, "*.md"))
+	if err != nil {
+		return "", err
+	}
+	allowed := false
+	for _, path := range matches {
+		if strings.TrimSuffix(filepath.Base(path), ".md") == name {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "", fmt.Errorf("RuntimeError: unknown skill: %s", name)
+	}
+	path := filepath.Join(skillsDir, name+".md")
+	strip := true
+	if raw, ok := config["strip_frontmatter"].(bool); ok {
+		strip = raw
+	}
+	if !strip {
+		data, err := os.ReadFile(path)
+		return string(data), err
+	}
+	_, body, err := ParseSkillFile(path)
+	return body, err
 }
 
 func requiredString(args map[string]any, key string) (string, error) {

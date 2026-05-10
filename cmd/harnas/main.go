@@ -185,7 +185,8 @@ func buildAgent(options agentOptions) (*harnas.Agent, error) {
 		manifest.Provider.Model = options.model
 	}
 	loaded, err := harnas.BuildManifest(manifest, harnas.ManifestOptions{
-		ToolHandlers: harnas.BuiltinHandlers(),
+		ToolHandlers:       harnas.BuiltinHandlers(),
+		ConfiguredHandlers: harnas.BuiltinConfiguredHandlers(),
 	})
 	if err != nil {
 		return nil, err

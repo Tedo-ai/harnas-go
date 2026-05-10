@@ -26,6 +26,7 @@ func Run(fixtureDir string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	resolveFixturePaths(&manifest, fixtureDir)
 	streaming := fileExists(filepath.Join(fixtureDir, "provider-script-stream.json"))
 	scriptPath := "provider-script.json"
 	if streaming {
@@ -85,6 +86,19 @@ func LoadManifest(fixtureDir string) (harnas.Manifest, error) {
 	return harnas.ReadManifest(filepath.Join(fixtureDir, "manifest.json"))
 }
 
+func resolveFixturePaths(manifest *harnas.Manifest, fixtureDir string) {
+	for i := range manifest.Tools {
+		if manifest.Tools[i].Config == nil {
+			continue
+		}
+		skillsDir := stringValue(manifest.Tools[i].Config["skills_dir"])
+		if skillsDir == "" || filepath.IsAbs(skillsDir) {
+			continue
+		}
+		manifest.Tools[i].Config["skills_dir"] = filepath.Join(fixtureDir, skillsDir)
+	}
+}
+
 func RunSession(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session) (*harnas.Session, error) {
 	session, _, err := RunSessionWithDeltaPath(manifest, scriptPath, inputs, session, "")
 	return session, err
@@ -127,14 +141,19 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		NewStrategyEventCollector(strategyEventsPath, session.Observation)
 	}
 	registry := harnas.NewRegistry()
+	configuredHandlers := harnas.BuiltinConfiguredHandlers()
 	for _, tool := range manifest.Tools {
-		registry.Register(harnas.Tool{
+		registered := harnas.Tool{
 			Name:        tool.Name,
 			Handler:     tool.Handler,
 			Description: tool.Description,
 			InputSchema: tool.InputSchema,
 			Config:      tool.Config,
-		})
+		}
+		if handler := configuredHandlers[tool.Handler]; handler != nil {
+			registered.CallConfig = handler
+		}
+		registry.Register(registered)
 	}
 	strategies, err := harnas.BuildStrategies(manifest.Strategies, nil)
 	if err != nil {

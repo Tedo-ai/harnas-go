@@ -20,6 +20,7 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 		"harnas.builtin.grep",
 		"harnas.builtin.run_shell",
 		"harnas.builtin.fetch_url",
+		"harnas.builtin.load_skill",
 	} {
 		if handlers[name] == nil {
 			t.Fatalf("missing handler %s", name)
@@ -29,8 +30,8 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 
 func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
 	descriptors := BuiltinDescriptors()
-	if len(descriptors) != 8 {
-		t.Fatalf("expected 8 descriptors, got %d", len(descriptors))
+	if len(descriptors) != 9 {
+		t.Fatalf("expected 9 descriptors, got %d", len(descriptors))
 	}
 	byName := map[string]ToolSpec{}
 	for _, descriptor := range descriptors {
@@ -39,7 +40,7 @@ func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
 			t.Fatalf("incomplete descriptor: %#v", descriptor)
 		}
 	}
-	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url"} {
+	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url", "load_skill"} {
 		if byName[name].Name == "" {
 			t.Fatalf("missing descriptor %s", name)
 		}
@@ -123,6 +124,34 @@ func TestBuiltinFetchURL(t *testing.T) {
 func TestBuiltinFetchURLRejectsUnsupportedSchemes(t *testing.T) {
 	if _, err := BuiltinFetchURL(map[string]any{"url": "file:///etc/passwd"}); err == nil {
 		t.Fatalf("expected error")
+	}
+}
+
+func TestBuiltinLoadSkillStripsFrontmatter(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "git_workflow.md")
+	if err := os.WriteFile(path, []byte("---\nname: git_workflow\ndescription: Git conventions\n---\nWrite crisp PR descriptions.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	result, err := BuiltinLoadSkill(
+		map[string]any{"name": "git_workflow"},
+		map[string]any{"skills_dir": dir},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result != "Write crisp PR descriptions.\n" {
+		t.Fatalf("unexpected skill body: %q", result)
+	}
+}
+
+func TestBuiltinLoadSkillRejectsInvalidName(t *testing.T) {
+	_, err := BuiltinLoadSkill(
+		map[string]any{"name": "foo-bar"},
+		map[string]any{"skills_dir": t.TempDir()},
+	)
+	if err == nil || !strings.Contains(err.Error(), "invalid skill name: foo-bar") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
