@@ -19,7 +19,8 @@ surfaces needed for real Go adoption.
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
 - Streaming HTTP providers for Anthropic, OpenAI, and Gemini
 - Built-in tools: read_file, write_file, edit_file, list_dir, glob,
-  grep, run_shell, fetch_url, load_skill, with manifest-ready descriptors
+  grep, run_shell, fetch_url, load_skill, plus experimental
+  bash_session, with manifest-ready descriptors
 - Tool middleware: Timed, Logged, Retried, RateLimiter, StaleReadGuard
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks and observation bus, MarkerTail, TokenMarkerTail, SummaryTail,
@@ -85,3 +86,15 @@ bin/smoke-anthropic "say hello in one word"
 bin/smoke-openai "say hello in one word"
 bin/smoke-gemini "say hello in one word"
 ```
+
+## Experimental bash_session
+
+The Go port includes an experimental `harnas.builtin.bash_session`
+handler following the informative convention in the spec repo. It runs a
+long-lived shell per named session, preserving `cd` and `export` across
+tool calls, and returns a JSON object encoded as the string
+`tool_result.output`.
+
+Prefer this tool for sandboxed coding agents that can safely expose a
+shell. The narrower `list_dir`, `glob`, `grep`, and `run_shell` tools
+remain available and are still the safer fit for restricted agents.

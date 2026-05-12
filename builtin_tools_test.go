@@ -1,6 +1,7 @@
 package harnas
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -21,6 +22,7 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 		"harnas.builtin.run_shell",
 		"harnas.builtin.fetch_url",
 		"harnas.builtin.load_skill",
+		"harnas.builtin.bash_session",
 	} {
 		if handlers[name] == nil {
 			t.Fatalf("missing handler %s", name)
@@ -30,8 +32,8 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 
 func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
 	descriptors := BuiltinDescriptors()
-	if len(descriptors) != 9 {
-		t.Fatalf("expected 9 descriptors, got %d", len(descriptors))
+	if len(descriptors) != 10 {
+		t.Fatalf("expected 10 descriptors, got %d", len(descriptors))
 	}
 	byName := map[string]ToolSpec{}
 	for _, descriptor := range descriptors {
@@ -40,7 +42,7 @@ func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
 			t.Fatalf("incomplete descriptor: %#v", descriptor)
 		}
 	}
-	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url", "load_skill"} {
+	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url", "load_skill", "bash_session"} {
 		if byName[name].Name == "" {
 			t.Fatalf("missing descriptor %s", name)
 		}
@@ -153,6 +155,112 @@ func TestBuiltinLoadSkillRejectsInvalidName(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "invalid skill name: foo-bar") {
 		t.Fatalf("unexpected error: %v", err)
 	}
+}
+
+func TestBashSessionPersistsWorkingDirectoryAndEnv(t *testing.T) {
+	dir := t.TempDir()
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	config := map[string]any{"cwd": dir, "max_output_bytes": float64(4096)}
+
+	first := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "export MYVAR=hello && cd /tmp",
+	}, config)
+	if first.Status != "completed" || first.ExitCode == nil || *first.ExitCode != 0 {
+		t.Fatalf("unexpected first result: %#v", first)
+	}
+
+	second := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "echo $MYVAR && pwd",
+	}, config)
+	if !strings.Contains(second.Stdout, "hello\n/tmp\n") {
+		t.Fatalf("state did not persist: %#v", second)
+	}
+}
+
+func TestBashSessionTimeoutStatusAndKill(t *testing.T) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	config := map[string]any{"cwd": t.TempDir()}
+
+	running := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "sleep 5",
+		"timeout_ms": float64(50),
+	}, config)
+	if running.Status != "running" || running.ExitCode != nil {
+		t.Fatalf("expected running timeout result, got %#v", running)
+	}
+
+	status := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"action":     "status",
+	}, config)
+	if status.Status != "running" {
+		t.Fatalf("expected running status, got %#v", status)
+	}
+
+	killed := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"action":     "kill",
+	}, config)
+	if killed.Status != "killed" {
+		t.Fatalf("expected killed, got %#v", killed)
+	}
+}
+
+func TestBashSessionTruncatesAndStripsANSI(t *testing.T) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	result := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "printf '\\033[31m0123456789\\033[0m'",
+	}, map[string]any{"cwd": t.TempDir(), "max_output_bytes": float64(5)})
+	if !result.Truncated {
+		t.Fatalf("expected truncation: %#v", result)
+	}
+	if strings.Contains(result.Stdout, "\x1b") {
+		t.Fatalf("ANSI escape sequence was not stripped: %q", result.Stdout)
+	}
+	if result.Stdout != "6789\n" {
+		t.Fatalf("expected tail output, got %q", result.Stdout)
+	}
+}
+
+func TestBashSessionNonZeroExitIsToolOutput(t *testing.T) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	result := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "false",
+	}, map[string]any{"cwd": t.TempDir()})
+	if result.Status != "completed" || result.ExitCode == nil || *result.ExitCode != 1 {
+		t.Fatalf("expected exit code 1 as output, got %#v", result)
+	}
+}
+
+func TestBashSessionUnknownStatusErrors(t *testing.T) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	_, err := registry.Handle(map[string]any{"session_id": "missing", "action": "status"}, nil)
+	if err == nil || !strings.Contains(err.Error(), "unknown bash_session session_id") {
+		t.Fatalf("expected unknown session error, got %v", err)
+	}
+}
+
+func mustBashSession(t *testing.T, registry *BashSessionRegistry, args map[string]any, config map[string]any) bashSessionResult {
+	t.Helper()
+	output, err := registry.Handle(args, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result bashSessionResult
+	if err := json.Unmarshal([]byte(output), &result); err != nil {
+		t.Fatalf("invalid bash_session JSON %q: %v", output, err)
+	}
+	return result
 }
 
 func mustRead(t *testing.T, path string) []byte {

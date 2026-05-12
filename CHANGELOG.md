@@ -4,6 +4,15 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Added experimental `harnas.builtin.bash_session`, a persistent
+  shell-session built-in for sandboxed coding agents. It preserves
+  working directory and environment changes across calls to the same
+  session, supports `run` / `status` / `kill`, strips ANSI output,
+  tail-truncates large stdout/stderr buffers, and returns canonical JSON
+  as `tool_result.output`.
+
 ## [0.10.0] — 2026-05-10
 
 ### Added

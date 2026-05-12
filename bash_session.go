@@ -1,0 +1,415 @@
+package harnas
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+)
+
+const DefaultBashSessionMaxOutputBytes = 64 * 1024
+
+var ansiPattern = regexp.MustCompile(`\x1b\[[0-9;]*[mGKHF]|\r`)
+
+type BashSessionRegistry struct {
+	mu       sync.Mutex
+	sessions map[string]*bashSession
+}
+
+func NewBashSessionRegistry() *BashSessionRegistry {
+	return &BashSessionRegistry{sessions: map[string]*bashSession{}}
+}
+
+func (r *BashSessionRegistry) Handle(args map[string]any, config map[string]any) (string, error) {
+	action := stringValue(args["action"])
+	command := stringValue(args["command"])
+	if action == "" && command != "" {
+		action = "run"
+	}
+	if action == "" {
+		action = "status"
+	}
+
+	sessionID := stringValue(args["session_id"])
+	switch action {
+	case "run":
+		if command == "" {
+			return "", fmt.Errorf("missing required argument: command")
+		}
+		session, err := r.session(sessionID, config, true)
+		if err != nil {
+			return "", err
+		}
+		timeout := durationMillis(args["timeout_ms"])
+		return marshalBashSessionResult(session.run(command, timeout))
+	case "status":
+		session, err := r.session(sessionID, config, false)
+		if err != nil {
+			return "", err
+		}
+		return marshalBashSessionResult(session.status())
+	case "kill":
+		session, err := r.session(sessionID, config, false)
+		if err != nil {
+			return "", err
+		}
+		return marshalBashSessionResult(session.kill())
+	default:
+		return "", fmt.Errorf("unknown bash_session action: %s", action)
+	}
+}
+
+func (r *BashSessionRegistry) Close() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, session := range r.sessions {
+		_ = session.close()
+	}
+	r.sessions = map[string]*bashSession{}
+}
+
+func (r *BashSessionRegistry) session(id string, config map[string]any, create bool) (*bashSession, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if id != "" {
+		if session := r.sessions[id]; session != nil {
+			return session, nil
+		}
+		if !create {
+			return nil, fmt.Errorf("unknown bash_session session_id: %s", id)
+		}
+	} else if !create {
+		return nil, fmt.Errorf("missing required argument: session_id")
+	}
+
+	if id == "" {
+		id = "sh_" + newID()
+	}
+	session, err := startBashSession(id, config)
+	if err != nil {
+		return nil, err
+	}
+	r.sessions[id] = session
+	return session, nil
+}
+
+type bashSession struct {
+	id     string
+	cmd    *exec.Cmd
+	stdin  io.WriteCloser
+	stdout *ringBuffer
+	stderr *ringBuffer
+
+	mu      sync.Mutex
+	current *bashCommand
+	closed  bool
+}
+
+type bashCommand struct {
+	token    string
+	done     chan struct{}
+	exitCode *int
+}
+
+type bashSessionResult struct {
+	SessionID string `json:"session_id"`
+	Status    string `json:"status"`
+	ExitCode  *int   `json:"exit_code"`
+	Stdout    string `json:"stdout"`
+	Stderr    string `json:"stderr"`
+	Truncated bool   `json:"truncated"`
+}
+
+func startBashSession(id string, config map[string]any) (*bashSession, error) {
+	shell := stringValue(config["shell"])
+	if shell == "" {
+		shell = "bash"
+	}
+	if _, err := exec.LookPath(shell); err != nil && shell == "bash" {
+		shell = "sh"
+	}
+	maxBytes := intValue(config["max_output_bytes"])
+	if maxBytes <= 0 {
+		maxBytes = DefaultBashSessionMaxOutputBytes
+	}
+	cwd := stringValue(config["cwd"])
+	if cwd == "" {
+		cwd = "."
+	}
+	absCWD, err := filepath.Abs(cwd)
+	if err != nil {
+		return nil, err
+	}
+
+	cmd := exec.Command(shell)
+	cmd.Dir = absCWD
+	cmd.Stdin = nil
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, err
+	}
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+
+	session := &bashSession{
+		id:     id,
+		cmd:    cmd,
+		stdin:  stdin,
+		stdout: newRingBuffer(maxBytes),
+		stderr: newRingBuffer(maxBytes),
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, err
+	}
+	go session.readStdout(stdoutPipe)
+	go session.copyOutput(stderrPipe, session.stderr)
+	go session.waitShell()
+	return session, nil
+}
+
+func (s *bashSession) run(command string, timeout time.Duration) bashSessionResult {
+	s.mu.Lock()
+	for s.current != nil {
+		current := s.current
+		s.mu.Unlock()
+		<-current.done
+		s.mu.Lock()
+	}
+	if s.closed {
+		s.mu.Unlock()
+		return s.snapshot("killed", nil)
+	}
+
+	run := &bashCommand{token: newID(), done: make(chan struct{})}
+	s.current = run
+	framed := fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '\\n__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", command, run.token)
+	if _, err := io.WriteString(s.stdin, framed); err != nil {
+		s.current = nil
+		close(run.done)
+		s.mu.Unlock()
+		return s.snapshot("killed", nil)
+	}
+	s.mu.Unlock()
+
+	if timeout > 0 {
+		select {
+		case <-run.done:
+			return s.snapshot("completed", run.exitCode)
+		case <-time.After(timeout):
+			return s.snapshot("running", nil)
+		}
+	}
+	<-run.done
+	return s.snapshot("completed", run.exitCode)
+}
+
+func (s *bashSession) status() bashSessionResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current != nil {
+		return s.snapshot("running", nil)
+	}
+	if s.closed {
+		return s.snapshot("killed", nil)
+	}
+	return s.snapshot("completed", nil)
+}
+
+func (s *bashSession) kill() bashSessionResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil {
+		return s.snapshot("completed", nil)
+	}
+	_ = s.killProcessGroup(syscall.SIGTERM)
+	current := s.current
+	s.mu.Unlock()
+	select {
+	case <-current.done:
+	case <-time.After(3 * time.Second):
+		_ = s.killProcessGroup(syscall.SIGKILL)
+		<-current.done
+	}
+	s.mu.Lock()
+	s.closed = true
+	return s.snapshot("killed", nil)
+}
+
+func (s *bashSession) close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	_ = s.killProcessGroup(syscall.SIGKILL)
+	return nil
+}
+
+func (s *bashSession) killProcessGroup(signal syscall.Signal) error {
+	if s.cmd.Process == nil {
+		return nil
+	}
+	pgid, err := syscall.Getpgid(s.cmd.Process.Pid)
+	if err != nil {
+		return err
+	}
+	return syscall.Kill(-pgid, signal)
+}
+
+func (s *bashSession) snapshot(status string, exitCode *int) bashSessionResult {
+	return bashSessionResult{
+		SessionID: s.id,
+		Status:    status,
+		ExitCode:  exitCode,
+		Stdout:    s.stdout.String(),
+		Stderr:    s.stderr.String(),
+		Truncated: s.stdout.Truncated() || s.stderr.Truncated(),
+	}
+}
+
+func (s *bashSession) readStdout(reader io.Reader) {
+	buffered := bufio.NewReader(reader)
+	for {
+		line, err := buffered.ReadString('\n')
+		if line != "" {
+			if s.handleSentinel(line) {
+				if err != nil {
+					return
+				}
+				continue
+			}
+			s.stdout.WriteString(stripANSI(line))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (s *bashSession) handleSentinel(line string) bool {
+	const prefix = "__HARNAS_DONE_"
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(trimmed, prefix) {
+		return false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(trimmed, prefix), ":", 2)
+	if len(parts) != 2 {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil || s.current.token != parts[0] {
+		return false
+	}
+	if code, err := strconv.Atoi(parts[1]); err == nil {
+		s.current.exitCode = &code
+	}
+	close(s.current.done)
+	s.current = nil
+	return true
+}
+
+func (s *bashSession) copyOutput(reader io.Reader, target *ringBuffer) {
+	buf := make([]byte, 4096)
+	for {
+		n, err := reader.Read(buf)
+		if n > 0 {
+			target.WriteString(stripANSI(string(buf[:n])))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func (s *bashSession) waitShell() {
+	err := s.cmd.Wait()
+	code := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			code = exitErr.ExitCode()
+		} else {
+			code = -1
+		}
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	if s.current != nil {
+		s.current.exitCode = &code
+		close(s.current.done)
+		s.current = nil
+	}
+}
+
+type ringBuffer struct {
+	mu        sync.Mutex
+	max       int
+	data      []byte
+	truncated bool
+}
+
+func newRingBuffer(max int) *ringBuffer {
+	return &ringBuffer{max: max}
+}
+
+func (b *ringBuffer) WriteString(value string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.data = append(b.data, []byte(value)...)
+	if b.max > 0 && len(b.data) > b.max {
+		b.truncated = true
+		b.data = append([]byte(nil), b.data[len(b.data)-b.max:]...)
+	}
+}
+
+func (b *ringBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.data)
+}
+
+func (b *ringBuffer) Truncated() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.truncated
+}
+
+func stripANSI(value string) string {
+	return ansiPattern.ReplaceAllString(value, "")
+}
+
+func durationMillis(value any) time.Duration {
+	ms := intValue(value)
+	if ms <= 0 {
+		return 0
+	}
+	return time.Duration(ms) * time.Millisecond
+}
+
+func marshalBashSessionResult(result bashSessionResult) (string, error) {
+	encoded, err := json.Marshal(result)
+	if err != nil {
+		return "", err
+	}
+	return string(encoded), nil
+}
+
+func BuiltinBashSession(args map[string]any, config map[string]any) (string, error) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	return registry.Handle(args, config)
+}

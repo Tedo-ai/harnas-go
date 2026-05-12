@@ -34,12 +34,17 @@ func BuiltinHandlers() map[string]ToolHandler {
 		"harnas.builtin.load_skill": func(args map[string]any) (string, error) {
 			return BuiltinLoadSkill(args, nil)
 		},
+		"harnas.builtin.bash_session": func(args map[string]any) (string, error) {
+			return BuiltinBashSession(args, nil)
+		},
 	}
 }
 
 func BuiltinConfiguredHandlers() map[string]ConfiguredToolHandler {
+	bashSessions := NewBashSessionRegistry()
 	return map[string]ConfiguredToolHandler{
-		"harnas.builtin.load_skill": BuiltinLoadSkill,
+		"harnas.builtin.load_skill":   BuiltinLoadSkill,
+		"harnas.builtin.bash_session": bashSessions.Handle,
 	}
 }
 
@@ -152,6 +157,20 @@ func BuiltinDescriptors() []ToolSpec {
 				"type":       "object",
 				"properties": map[string]any{"name": map[string]any{"type": "string"}},
 				"required":   []any{"name"},
+			},
+		},
+		{
+			Name:        "bash_session",
+			Handler:     "harnas.builtin.bash_session",
+			Description: "Run a command in a persistent bash session. Sessions preserve working directory and environment variables across calls. stdin is /dev/null; interactive programs cannot receive input.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"session_id": map[string]any{"type": "string"},
+					"command":    map[string]any{"type": "string"},
+					"action":     map[string]any{"type": "string", "enum": []any{"run", "status", "kill"}},
+					"timeout_ms": map[string]any{"type": "integer", "minimum": float64(1)},
+				},
 			},
 		},
 	}
