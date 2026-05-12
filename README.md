@@ -98,3 +98,11 @@ tool calls, and returns a JSON object encoded as the string
 Prefer this tool for sandboxed coding agents that can safely expose a
 shell. The narrower `list_dir`, `glob`, `grep`, and `run_shell` tools
 remain available and are still the safer fit for restricted agents.
+
+A minimal live-provider manifest is available at
+`examples/bash-session/manifest.json`:
+
+```sh
+export OPENAI_API_KEY=...
+bin/harnas chat examples/bash-session/manifest.json
+```

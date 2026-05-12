@@ -1,0 +1,32 @@
+{
+  "harnas_version": "0.1",
+  "name": "bash-session-demo",
+  "system": "You are a coding assistant running in a sandbox. Use bash_session for shell work. Prefer non-interactive commands; stdin is /dev/null.",
+  "provider": {
+    "kind": "openai",
+    "model": "gpt-4.1-mini",
+    "max_tokens": 1024
+  },
+  "tools": [
+    {
+      "name": "bash_session",
+      "handler": "harnas.builtin.bash_session",
+      "description": "Run a command in a persistent bash session. Sessions preserve working directory and environment variables across calls. stdin is /dev/null; interactive programs cannot receive input.",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "session_id": { "type": "string" },
+          "command": { "type": "string" },
+          "action": { "type": "string", "enum": ["run", "status", "kill"] },
+          "timeout_ms": { "type": "integer", "minimum": 1 }
+        }
+      },
+      "config": {
+        "shell": "bash",
+        "cwd": ".",
+        "max_output_bytes": 65536
+      }
+    }
+  ],
+  "strategies": []
+}

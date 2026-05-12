@@ -12,6 +12,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
   session, supports `run` / `status` / `kill`, strips ANSI output,
   tail-truncates large stdout/stderr buffers, and returns canonical JSON
   as `tool_result.output`.
+- Added `examples/bash-session/`, a minimal live-provider manifest for
+  trying the experimental built-in from the CLI.
 
 ## [0.10.0] — 2026-05-10
 
