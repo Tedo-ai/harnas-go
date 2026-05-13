@@ -93,7 +93,8 @@ The Go port includes an experimental `harnas.builtin.bash_session`
 handler following the informative convention in the spec repo. It runs a
 long-lived shell per named session, preserving `cd` and `export` across
 tool calls, and returns a JSON object encoded as the string
-`tool_result.output`.
+`tool_result.output`. The result includes both cumulative `stdout` /
+`stderr` and command-local `command_stdout` / `command_stderr`.
 
 Prefer this tool for sandboxed coding agents that can safely expose a
 shell. The narrower `list_dir`, `glob`, `grep`, and `run_shell` tools

@@ -14,6 +14,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
   as `tool_result.output`.
 - Added `examples/bash-session/`, a minimal live-provider manifest for
   trying the experimental built-in from the CLI.
+- Added `command_stdout` and `command_stderr` to the experimental
+  `bash_session` result, so agents can reason over the current command
+  without subtracting earlier session output from the cumulative
+  transcript.
 
 ## [0.10.0] — 2026-05-10
 

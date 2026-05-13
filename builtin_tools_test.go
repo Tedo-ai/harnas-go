@@ -180,6 +180,34 @@ func TestBashSessionPersistsWorkingDirectoryAndEnv(t *testing.T) {
 	}
 }
 
+func TestBashSessionReportsCommandLocalOutput(t *testing.T) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	config := map[string]any{"cwd": t.TempDir(), "max_output_bytes": float64(4096)}
+
+	first := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "printf first",
+	}, config)
+	if first.Stdout != "first" || first.CommandStdout != "first" {
+		t.Fatalf("unexpected first output: %#v", first)
+	}
+
+	second := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "printf second >&2",
+	}, config)
+	if second.Stdout != "first" {
+		t.Fatalf("expected cumulative stdout, got %#v", second)
+	}
+	if second.CommandStdout != "" {
+		t.Fatalf("expected command-local stdout to exclude prior output, got %#v", second)
+	}
+	if second.Stderr != "second" || second.CommandStderr != "second" {
+		t.Fatalf("expected command-local stderr, got %#v", second)
+	}
+}
+
 func TestBashSessionTimeoutStatusAndKill(t *testing.T) {
 	registry := NewBashSessionRegistry()
 	defer registry.Close()
@@ -224,7 +252,7 @@ func TestBashSessionTruncatesAndStripsANSI(t *testing.T) {
 	if strings.Contains(result.Stdout, "\x1b") {
 		t.Fatalf("ANSI escape sequence was not stripped: %q", result.Stdout)
 	}
-	if result.Stdout != "6789\n" {
+	if result.Stdout != "56789" {
 		t.Fatalf("expected tail output, got %q", result.Stdout)
 	}
 }

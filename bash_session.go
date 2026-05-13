@@ -114,18 +114,24 @@ type bashSession struct {
 }
 
 type bashCommand struct {
-	token    string
-	done     chan struct{}
-	exitCode *int
+	token       string
+	done        chan struct{}
+	exitCode    *int
+	stdoutStart int64
+	stderrStart int64
+	stdoutDone  bool
+	stderrDone  bool
 }
 
 type bashSessionResult struct {
-	SessionID string `json:"session_id"`
-	Status    string `json:"status"`
-	ExitCode  *int   `json:"exit_code"`
-	Stdout    string `json:"stdout"`
-	Stderr    string `json:"stderr"`
-	Truncated bool   `json:"truncated"`
+	SessionID     string `json:"session_id"`
+	Status        string `json:"status"`
+	ExitCode      *int   `json:"exit_code"`
+	Stdout        string `json:"stdout"`
+	Stderr        string `json:"stderr"`
+	CommandStdout string `json:"command_stdout"`
+	CommandStderr string `json:"command_stderr"`
+	Truncated     bool   `json:"truncated"`
 }
 
 func startBashSession(id string, config map[string]any) (*bashSession, error) {
@@ -177,7 +183,7 @@ func startBashSession(id string, config map[string]any) (*bashSession, error) {
 		return nil, err
 	}
 	go session.readStdout(stdoutPipe)
-	go session.copyOutput(stderrPipe, session.stderr)
+	go session.readStderr(stderrPipe)
 	go session.waitShell()
 	return session, nil
 }
@@ -192,49 +198,54 @@ func (s *bashSession) run(command string, timeout time.Duration) bashSessionResu
 	}
 	if s.closed {
 		s.mu.Unlock()
-		return s.snapshot("killed", nil)
+		return s.snapshot("killed", nil, nil)
 	}
 
-	run := &bashCommand{token: newID(), done: make(chan struct{})}
+	run := &bashCommand{
+		token:       newID(),
+		done:        make(chan struct{}),
+		stdoutStart: s.stdout.Offset(),
+		stderrStart: s.stderr.Offset(),
+	}
 	s.current = run
-	framed := fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '\\n__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", command, run.token)
+	framed := fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '__HARNAS_ERR_DONE_%s\\n' >&2; printf '__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", command, run.token, run.token)
 	if _, err := io.WriteString(s.stdin, framed); err != nil {
 		s.current = nil
 		close(run.done)
 		s.mu.Unlock()
-		return s.snapshot("killed", nil)
+		return s.snapshot("killed", nil, run)
 	}
 	s.mu.Unlock()
 
 	if timeout > 0 {
 		select {
 		case <-run.done:
-			return s.snapshot("completed", run.exitCode)
+			return s.snapshot("completed", run.exitCode, run)
 		case <-time.After(timeout):
-			return s.snapshot("running", nil)
+			return s.snapshot("running", nil, run)
 		}
 	}
 	<-run.done
-	return s.snapshot("completed", run.exitCode)
+	return s.snapshot("completed", run.exitCode, run)
 }
 
 func (s *bashSession) status() bashSessionResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current != nil {
-		return s.snapshot("running", nil)
+		return s.snapshot("running", nil, s.current)
 	}
 	if s.closed {
-		return s.snapshot("killed", nil)
+		return s.snapshot("killed", nil, nil)
 	}
-	return s.snapshot("completed", nil)
+	return s.snapshot("completed", nil, nil)
 }
 
 func (s *bashSession) kill() bashSessionResult {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil {
-		return s.snapshot("completed", nil)
+		return s.snapshot("completed", nil, nil)
 	}
 	_ = s.killProcessGroup(syscall.SIGTERM)
 	current := s.current
@@ -247,7 +258,7 @@ func (s *bashSession) kill() bashSessionResult {
 	}
 	s.mu.Lock()
 	s.closed = true
-	return s.snapshot("killed", nil)
+	return s.snapshot("killed", nil, current)
 }
 
 func (s *bashSession) close() error {
@@ -269,14 +280,22 @@ func (s *bashSession) killProcessGroup(signal syscall.Signal) error {
 	return syscall.Kill(-pgid, signal)
 }
 
-func (s *bashSession) snapshot(status string, exitCode *int) bashSessionResult {
+func (s *bashSession) snapshot(status string, exitCode *int, command *bashCommand) bashSessionResult {
+	commandStdout := ""
+	commandStderr := ""
+	if command != nil {
+		commandStdout = s.stdout.StringFrom(command.stdoutStart)
+		commandStderr = s.stderr.StringFrom(command.stderrStart)
+	}
 	return bashSessionResult{
-		SessionID: s.id,
-		Status:    status,
-		ExitCode:  exitCode,
-		Stdout:    s.stdout.String(),
-		Stderr:    s.stderr.String(),
-		Truncated: s.stdout.Truncated() || s.stderr.Truncated(),
+		SessionID:     s.id,
+		Status:        status,
+		ExitCode:      exitCode,
+		Stdout:        s.stdout.String(),
+		Stderr:        s.stderr.String(),
+		CommandStdout: commandStdout,
+		CommandStderr: commandStderr,
+		Truncated:     s.stdout.Truncated() || s.stderr.Truncated(),
 	}
 }
 
@@ -285,7 +304,10 @@ func (s *bashSession) readStdout(reader io.Reader) {
 	for {
 		line, err := buffered.ReadString('\n')
 		if line != "" {
-			if s.handleSentinel(line) {
+			if before, ok := s.handleSentinel(line); ok {
+				if before != "" {
+					s.stdout.WriteString(stripANSI(before))
+				}
 				if err != nil {
 					return
 				}
@@ -299,40 +321,77 @@ func (s *bashSession) readStdout(reader io.Reader) {
 	}
 }
 
-func (s *bashSession) handleSentinel(line string) bool {
+func (s *bashSession) handleSentinel(line string) (string, bool) {
 	const prefix = "__HARNAS_DONE_"
-	trimmed := strings.TrimSpace(line)
-	if !strings.HasPrefix(trimmed, prefix) {
-		return false
+	index := strings.Index(line, prefix)
+	if index < 0 {
+		return "", false
 	}
+	before := line[:index]
+	trimmed := strings.TrimSpace(line[index:])
 	parts := strings.SplitN(strings.TrimPrefix(trimmed, prefix), ":", 2)
 	if len(parts) != 2 {
-		return false
+		return "", false
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil || s.current.token != parts[0] {
-		return false
+		return "", false
 	}
 	if code, err := strconv.Atoi(parts[1]); err == nil {
 		s.current.exitCode = &code
 	}
-	close(s.current.done)
-	s.current = nil
-	return true
+	s.current.stdoutDone = true
+	s.completeCurrentIfReadyLocked()
+	return before, true
 }
 
-func (s *bashSession) copyOutput(reader io.Reader, target *ringBuffer) {
-	buf := make([]byte, 4096)
+func (s *bashSession) readStderr(reader io.Reader) {
+	buffered := bufio.NewReader(reader)
 	for {
-		n, err := reader.Read(buf)
-		if n > 0 {
-			target.WriteString(stripANSI(string(buf[:n])))
+		line, err := buffered.ReadString('\n')
+		if line != "" {
+			if before, ok := s.handleStderrSentinel(line); ok {
+				if before != "" {
+					s.stderr.WriteString(stripANSI(before))
+				}
+				if err != nil {
+					return
+				}
+				continue
+			}
+			s.stderr.WriteString(stripANSI(line))
 		}
 		if err != nil {
 			return
 		}
 	}
+}
+
+func (s *bashSession) handleStderrSentinel(line string) (string, bool) {
+	const prefix = "__HARNAS_ERR_DONE_"
+	index := strings.Index(line, prefix)
+	if index < 0 {
+		return "", false
+	}
+	before := line[:index]
+	token := strings.TrimSpace(strings.TrimPrefix(line[index:], prefix))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.current == nil || s.current.token != token {
+		return "", false
+	}
+	s.current.stderrDone = true
+	s.completeCurrentIfReadyLocked()
+	return before, true
+}
+
+func (s *bashSession) completeCurrentIfReadyLocked() {
+	if s.current == nil || !s.current.stdoutDone || !s.current.stderrDone {
+		return
+	}
+	close(s.current.done)
+	s.current = nil
 }
 
 func (s *bashSession) waitShell() {
@@ -359,6 +418,7 @@ type ringBuffer struct {
 	mu        sync.Mutex
 	max       int
 	data      []byte
+	total     int64
 	truncated bool
 }
 
@@ -369,7 +429,9 @@ func newRingBuffer(max int) *ringBuffer {
 func (b *ringBuffer) WriteString(value string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.data = append(b.data, []byte(value)...)
+	chunk := []byte(value)
+	b.total += int64(len(chunk))
+	b.data = append(b.data, chunk...)
 	if b.max > 0 && len(b.data) > b.max {
 		b.truncated = true
 		b.data = append([]byte(nil), b.data[len(b.data)-b.max:]...)
@@ -380,6 +442,26 @@ func (b *ringBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.data)
+}
+
+func (b *ringBuffer) Offset() int64 {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.total
+}
+
+func (b *ringBuffer) StringFrom(offset int64) string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	startOffset := b.total - int64(len(b.data))
+	if offset < startOffset {
+		offset = startOffset
+	}
+	if offset > b.total {
+		offset = b.total
+	}
+	start := int(offset - startOffset)
+	return string(b.data[start:])
 }
 
 func (b *ringBuffer) Truncated() bool {
