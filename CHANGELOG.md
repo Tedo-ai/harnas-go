@@ -18,6 +18,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
   `bash_session` result, so agents can reason over the current command
   without subtracting earlier session output from the cumulative
   transcript.
+- Added adopter helper surfaces: `NewRuntime`, `TranscriptProject`,
+  `ToolDescriptors`, and `ManifestSnapshotMetadata`.
 
 ## [0.10.0] — 2026-05-10
 

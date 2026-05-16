@@ -29,6 +29,8 @@ surfaces needed for real Go adoption.
 - Scripted provider errors and provider_error Log events
 - Observation-only streaming transport events plus DeltaLogger sidecar
   persistence for debugging
+- Adopter helper APIs: `NewRuntime`, `TranscriptProject`,
+  `ToolDescriptors`, and `ManifestSnapshotMetadata`
 
 ## Run
 
