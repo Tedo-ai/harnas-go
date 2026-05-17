@@ -8,19 +8,19 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.10.0** (2026-05-10). Tracks Harnas spec 0.10.0.
+**Version 0.11.0** (2026-05-17). Tracks Harnas spec 0.11.0.
 
 ## Status
 
-- Agent conformance: 30/30 fixtures passing
+- Agent conformance: 34/34 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
 - Buffered HTTP providers for Anthropic, OpenAI, and Gemini
 - Streaming HTTP providers for Anthropic, OpenAI, and Gemini
 - Built-in tools: read_file, write_file, edit_file, list_dir, glob,
-  grep, run_shell, fetch_url, load_skill, plus experimental
-  bash_session, with manifest-ready descriptors
+  grep, run_shell, fetch_url, load_skill, bash_session, with
+  manifest-ready descriptors
 - Tool middleware: Timed, Logged, Retried, RateLimiter, StaleReadGuard
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks and observation bus, MarkerTail, TokenMarkerTail, SummaryTail,
@@ -89,12 +89,11 @@ bin/smoke-openai "say hello in one word"
 bin/smoke-gemini "say hello in one word"
 ```
 
-## Experimental bash_session
+## bash_session
 
-The Go port includes an experimental `harnas.builtin.bash_session`
-handler following the informative convention in the spec repo. It runs a
-long-lived shell per named session, preserving `cd` and `export` across
-tool calls, and returns a JSON object encoded as the string
+The Go port includes the conformable `harnas.builtin.bash_session`
+handler. It runs a long-lived shell per named session, preserving `cd`
+and `export` across tool calls, and returns a JSON object encoded as the string
 `tool_result.output`. The result includes both cumulative `stdout` /
 `stderr` and command-local `command_stdout` / `command_stderr`.
 

@@ -4,22 +4,26 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-05-17
+
 ### Added
 
-- Added experimental `harnas.builtin.bash_session`, a persistent
-  shell-session built-in for sandboxed coding agents. It preserves
+- Promoted `harnas.builtin.bash_session` to the conformable surface, a
+  persistent shell-session built-in for sandboxed coding agents. It preserves
   working directory and environment changes across calls to the same
   session, supports `run` / `status` / `kill`, strips ANSI output,
   tail-truncates large stdout/stderr buffers, and returns canonical JSON
   as `tool_result.output`.
 - Added `examples/bash-session/`, a minimal live-provider manifest for
-  trying the experimental built-in from the CLI.
-- Added `command_stdout` and `command_stderr` to the experimental
-  `bash_session` result, so agents can reason over the current command
+  trying `bash_session` from the CLI.
+- Added `command_stdout` and `command_stderr` to the `bash_session`
+  result, so agents can reason over the current command
   without subtracting earlier session output from the cumulative
   transcript.
 - Added adopter helper surfaces: `NewRuntime`, `TranscriptProject`,
   `ToolDescriptors`, and `ManifestSnapshotMetadata`.
+- Conformance now passes 34/34 fixtures, including the four
+  `bash_session` fixtures.
 
 ## [0.10.0] — 2026-05-10
 
@@ -238,6 +242,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.11.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.11.0
 [0.10.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.10.0
 [0.9.3]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.3
 [0.9.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.2

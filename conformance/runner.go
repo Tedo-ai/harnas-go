@@ -92,10 +92,13 @@ func resolveFixturePaths(manifest *harnas.Manifest, fixtureDir string) {
 			continue
 		}
 		skillsDir := stringValue(manifest.Tools[i].Config["skills_dir"])
-		if skillsDir == "" || filepath.IsAbs(skillsDir) {
-			continue
+		if skillsDir != "" && !filepath.IsAbs(skillsDir) {
+			manifest.Tools[i].Config["skills_dir"] = filepath.Join(fixtureDir, skillsDir)
 		}
-		manifest.Tools[i].Config["skills_dir"] = filepath.Join(fixtureDir, skillsDir)
+		cwd := stringValue(manifest.Tools[i].Config["cwd"])
+		if cwd != "" && !filepath.IsAbs(cwd) {
+			manifest.Tools[i].Config["cwd"] = filepath.Join(fixtureDir, cwd)
+		}
 	}
 }
 
