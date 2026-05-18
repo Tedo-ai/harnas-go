@@ -48,12 +48,28 @@ func (l AgentLoop) Run() (reason string, err error) {
 			reason = "no_pending_tools"
 			break
 		}
+		if l.terminalRuntimeError() {
+			reason = "runtime_failed"
+			break
+		}
 	}
 	return reason, nil
 }
 
+func (l AgentLoop) terminalRuntimeError() bool {
+	for _, event := range l.Session.Log.Events() {
+		if event.Type == EventRuntimeError && event.Payload["terminal"] == true {
+			return true
+		}
+	}
+	return false
+}
+
 func (l AgentLoop) runTurn() (string, error) {
 	l.Session.Hooks.Invoke("pre_projection", map[string]any{"session": l.Session})
+	if l.terminalRuntimeError() {
+		return "runtime_failed", nil
+	}
 	request, err := l.Projection.Project(l.Session.Log)
 	if err != nil {
 		return "", err

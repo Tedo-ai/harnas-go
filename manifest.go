@@ -350,7 +350,7 @@ func validateTools(tools []ToolSpec) error {
 }
 
 func validateStrategies(strategies []StrategySpec) error {
-	pattern := regexp.MustCompile(`^[A-Z][A-Za-z0-9]+::[A-Z][A-Za-z0-9]+$`)
+	pattern := regexp.MustCompile(`^([A-Z][A-Za-z0-9]+::[A-Z][A-Za-z0-9]+|[a-z][a-z0-9_-]*/[a-z][a-z0-9_-]*)$`)
 	for _, strategy := range strategies {
 		if !pattern.MatchString(strategy.Name) {
 			return validationError("strategy name %q is not canonical", strategy.Name)
@@ -484,6 +484,25 @@ func BuildStrategiesWithRuntime(
 			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: HumanApproval{
 				Prompt:       handler,
 				DenialReason: stringValue(spec.Config["denial_reason"]),
+			}})
+		case "sandbox/write":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: WriteSandbox{
+				Allow: stringSlice(spec.Config["allow"]),
+				Deny:  stringSlice(spec.Config["deny"]),
+			}})
+		case "guard/repetition":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: RepetitionGuard{
+				MaxConsecutiveFailures: intValue(spec.Config["max_consecutive_failures"]),
+				MaxIdenticalCalls:      intValue(spec.Config["max_identical_calls"]),
+			}})
+		case "guard/timeout":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: TimeoutGuard{
+				TimeoutSeconds: intValue(spec.Config["timeout_seconds"]),
+			}})
+		case "guard/cost_budget":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: CostBudgetGuard{
+				MaxInputTokens:  intValue(spec.Config["max_input_tokens"]),
+				MaxOutputTokens: intValue(spec.Config["max_output_tokens"]),
 			}})
 		default:
 			return nil, unknownStrategyError("unknown canonical strategy: %q", spec.Name)
@@ -686,7 +705,8 @@ func knownStrategy(name string) bool {
 	switch name {
 	case "Compaction::MarkerTail", "Compaction::SummaryTail",
 		"Compaction::TokenMarkerTail", "Compaction::ToolOutputCap",
-		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval":
+		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval",
+		"sandbox/write", "guard/repetition", "guard/timeout", "guard/cost_budget":
 		return true
 	default:
 		return false

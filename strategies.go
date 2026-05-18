@@ -1,8 +1,13 @@
 package harnas
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -163,6 +168,236 @@ func utf8Prefix(value string, maxBytes int) string {
 type DenyByName struct {
 	Names        []string
 	ReasonFormat string
+}
+
+type WriteSandbox struct {
+	Allow []string
+	Deny  []string
+}
+
+type RepetitionGuard struct {
+	MaxConsecutiveFailures int
+	MaxIdenticalCalls      int
+}
+
+type TimeoutGuard struct {
+	TimeoutSeconds int
+}
+
+type CostBudgetGuard struct {
+	MaxInputTokens  int
+	MaxOutputTokens int
+}
+
+func (t TimeoutGuard) Install(session *Session) {
+	timeout := time.Duration(t.TimeoutSeconds) * time.Second
+	started := time.Now()
+	checks := 0
+	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
+		checks++
+		if timeout == 0 && checks == 1 {
+			return nil
+		}
+		if time.Since(started) < timeout {
+			return nil
+		}
+		session.Log.Append(EventRuntimeError, map[string]any{
+			"source":      "strategy",
+			"handler":     "guard/timeout",
+			"error_class": "Harnas::TimeoutGuard",
+			"message":     "timeout",
+			"reason":      "timeout",
+			"terminal":    true,
+		})
+		return nil
+	})
+}
+
+func (c CostBudgetGuard) Install(session *Session) {
+	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
+		inputTokens, outputTokens := usageTotals(session.Log)
+		if (c.MaxInputTokens == 0 || inputTokens <= c.MaxInputTokens) &&
+			(c.MaxOutputTokens == 0 || outputTokens <= c.MaxOutputTokens) {
+			return nil
+		}
+		session.Log.Append(EventRuntimeError, map[string]any{
+			"source":            "strategy",
+			"handler":           "guard/cost_budget",
+			"error_class":       "Harnas::BudgetExceeded",
+			"message":           "budget_exceeded",
+			"reason":            "budget_exceeded",
+			"input_tokens":      float64(inputTokens),
+			"max_input_tokens":  nullableInt(c.MaxInputTokens),
+			"output_tokens":     float64(outputTokens),
+			"max_output_tokens": nullableInt(c.MaxOutputTokens),
+			"terminal":          true,
+		})
+		return nil
+	})
+}
+
+func usageTotals(log *Log) (int, int) {
+	inputTokens := 0
+	outputTokens := 0
+	for _, event := range log.Events() {
+		if event.Type != EventAssistantMessage {
+			continue
+		}
+		usage := asMap(event.Payload["usage"])
+		inputTokens += int(asFloat(usage["input_tokens"]))
+		outputTokens += int(asFloat(usage["output_tokens"]))
+	}
+	return inputTokens, outputTokens
+}
+
+func nullableInt(value int) any {
+	if value == 0 {
+		return nil
+	}
+	return float64(value)
+}
+
+func (r RepetitionGuard) Install(session *Session) {
+	maxFailures := r.MaxConsecutiveFailures
+	if maxFailures == 0 {
+		maxFailures = 3
+	}
+	maxIdentical := r.MaxIdenticalCalls
+	if maxIdentical == 0 {
+		maxIdentical = 5
+	}
+	consecutiveFailures := 0
+	calls := map[string]int{}
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		key := repetitionCallKey(toolUse)
+		calls[key]++
+		if calls[key] >= maxIdentical {
+			appendRepetitionRuntimeError(session, "identical_calls", toolUse, calls[key])
+		}
+		return nil
+	})
+	session.Hooks.On("post_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		toolResult, _ := ctx["tool_result"].(*Event)
+		if toolResult != nil && toolResult.Payload["error"] != nil {
+			consecutiveFailures++
+			if consecutiveFailures >= maxFailures {
+				appendRepetitionRuntimeError(session, "consecutive_failures", toolUse, consecutiveFailures)
+			}
+		} else {
+			consecutiveFailures = 0
+		}
+		return nil
+	})
+}
+
+func repetitionCallKey(toolUse Event) string {
+	args, _ := json.Marshal(asMap(toolUse.Payload["arguments"]))
+	sum := sha256.Sum256(args)
+	return stringValue(toolUse.Payload["name"]) + ":" + hex.EncodeToString(sum[:])
+}
+
+func appendRepetitionRuntimeError(session *Session, trigger string, toolUse Event, count int) {
+	session.Log.Append(EventRuntimeError, map[string]any{
+		"source":      "strategy",
+		"handler":     "guard/repetition",
+		"error_class": "Harnas::RepetitionGuard",
+		"message":     "repetition_guard",
+		"reason":      "repetition_guard",
+		"trigger":     trigger,
+		"tool":        stringValue(toolUse.Payload["name"]),
+		"count":       float64(count),
+		"terminal":    true,
+	})
+}
+
+func (w WriteSandbox) Install(session *Session) {
+	allowLabels := w.Allow
+	if allowLabels == nil {
+		allowLabels = []string{"."}
+	}
+	denyLabels := w.Deny
+	allow := normalizeSandboxPaths(allowLabels)
+	deny := normalizeSandboxPaths(denyLabels)
+	consecutiveViolations := 0
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		name, _ := toolUse.Payload["name"].(string)
+		if name != "write_file" && name != "edit_file" {
+			return map[string]any{"allow": true}
+		}
+		args := asMap(toolUse.Payload["arguments"])
+		path := stringValue(args["path"])
+		if path == "" {
+			return map[string]any{"allow": true}
+		}
+		normalized := normalizeSandboxPath(path)
+		if sandboxPathAllowed(normalized, allow) && !sandboxPathAllowed(normalized, deny) {
+			consecutiveViolations = 0
+			return map[string]any{"allow": true}
+		}
+		consecutiveViolations++
+		if consecutiveViolations >= 3 {
+			session.Log.Append(EventRuntimeError, map[string]any{
+				"source":      "strategy",
+				"handler":     "sandbox/write",
+				"error_class": "Harnas::SandboxViolation",
+				"message":     "sandbox_violation_limit",
+				"reason":      "sandbox_violation_limit",
+				"terminal":    true,
+			})
+			panic(TurnFailed{Message: "sandbox_violation_limit"})
+		}
+		return map[string]any{
+			"allow":  false,
+			"reason": sandboxWriteMessage(path, allowLabels, denyLabels),
+		}
+	})
+}
+
+func normalizeSandboxPaths(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, normalizeSandboxPath(value))
+	}
+	return out
+}
+
+func normalizeSandboxPath(value string) string {
+	if !filepath.IsAbs(value) {
+		wd, _ := osGetwd()
+		value = filepath.Join(wd, value)
+	}
+	cleaned, err := filepath.Abs(filepath.Clean(value))
+	if err != nil {
+		return filepath.Clean(value)
+	}
+	return cleaned
+}
+
+var osGetwd = func() (string, error) { return filepath.Abs(".") }
+
+func sandboxPathAllowed(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if path == prefix || strings.HasPrefix(path, prefix+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func sandboxWriteMessage(path string, allow, deny []string) string {
+	return fmt.Sprintf("Write to '%s' is not permitted. Allowed paths: %s. Denied paths: %s.",
+		path, quotedList(allow), quotedList(deny))
+}
+
+func quotedList(values []string) string {
+	parts := make([]string, 0, len(values))
+	for _, value := range values {
+		parts = append(parts, "'"+value+"'")
+	}
+	return "[" + strings.Join(parts, ", ") + "]"
 }
 
 func (d DenyByName) Install(session *Session) {

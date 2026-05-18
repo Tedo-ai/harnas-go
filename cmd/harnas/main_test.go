@@ -246,7 +246,7 @@ func TestProjectRejectsInvalidSeqRange(t *testing.T) {
 
 	var stdout, stderr bytes.Buffer
 	status := run([]string{"project", sessionPath, "--manifest", manifestPath, "--from-seq", "2", "--to-seq", "1"}, &stdout, &stderr)
-	if status != 1 || !strings.Contains(stderr.String(), "--to-seq must be >= --from-seq") {
+	if status != 2 || !strings.Contains(stderr.String(), "--to-seq must be >= --from-seq") {
 		t.Fatalf("status=%d stdout=%s stderr=%s", status, stdout.String(), stderr.String())
 	}
 }

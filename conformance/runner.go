@@ -21,6 +21,11 @@ type Result struct {
 }
 
 func Run(fixtureDir string) (Result, error) {
+	var err error
+	fixtureDir, err = filepath.Abs(fixtureDir)
+	if err != nil {
+		return Result{}, err
+	}
 	fixture := filepath.Base(fixtureDir)
 	manifest, err := LoadManifest(fixtureDir)
 	if err != nil {
@@ -32,6 +37,7 @@ func Run(fixtureDir string) (Result, error) {
 	if streaming {
 		scriptPath = "provider-script-stream.json"
 	}
+	scriptPath = filepath.Join(fixtureDir, scriptPath)
 
 	var inputs []any
 	if err := readJSON(filepath.Join(fixtureDir, "inputs.json"), &inputs); err != nil {
@@ -45,9 +51,17 @@ func Run(fixtureDir string) (Result, error) {
 
 	expectedDeltasPath := filepath.Join(fixtureDir, "expected-deltas.jsonl")
 	expectedStrategyEventsPath := filepath.Join(fixtureDir, "expected-strategy-events.jsonl")
+	cwd, err := os.Getwd()
+	if err != nil {
+		return Result{}, err
+	}
+	if err := os.Chdir(fixtureDir); err != nil {
+		return Result{}, err
+	}
+	defer os.Chdir(cwd)
 	session, actualDeltas, actualStrategyEvents, err := RunSessionWithSidecars(
 		manifest,
-		filepath.Join(fixtureDir, scriptPath),
+		scriptPath,
 		inputs,
 		nil,
 		expectedDeltasPath,
@@ -144,6 +158,7 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		NewStrategyEventCollector(strategyEventsPath, session.Observation)
 	}
 	registry := harnas.NewRegistry()
+	builtinHandlers := harnas.BuiltinHandlers()
 	configuredHandlers := harnas.BuiltinConfiguredHandlers()
 	for _, tool := range manifest.Tools {
 		registered := harnas.Tool{
@@ -155,6 +170,8 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		}
 		if handler := configuredHandlers[tool.Handler]; handler != nil {
 			registered.CallConfig = handler
+		} else if handler := builtinHandlers[tool.Handler]; handler != nil {
+			registered.Call = handler
 		}
 		registry.Register(registered)
 	}

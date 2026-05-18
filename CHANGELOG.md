@@ -4,6 +4,17 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-05-18
+
+### Added
+
+- Added `sandbox/write`, `guard/repetition`, `guard/timeout`, and
+  `guard/cost_budget` strategies.
+- Added `--output-format ndjson` for `bin/harnas run`.
+- Applied the shared CLI exit-code taxonomy and partial stdout flush on
+  exit-1 agent failures.
+- Conformance now passes 39/39 fixtures.
+
 ## [0.11.0] — 2026-05-17
 
 ### Added
@@ -242,6 +253,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.12.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.12.0
 [0.11.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.11.0
 [0.10.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.10.0
 [0.9.3]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.9.3

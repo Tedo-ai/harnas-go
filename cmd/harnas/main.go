@@ -16,7 +16,10 @@ import (
 
 const (
 	exitSuccess   = 0
-	exitUsage     = 1
+	exitAgent     = 1
+	exitUsage     = 2
+	exitApproval  = 3
+	exitSandbox   = 4
 	exitDifferent = 3
 )
 
@@ -132,9 +135,27 @@ func runOnce(args []string, stdout, stderr io.Writer) (int, error) {
 	if err := saveSession(agent, stderr); err != nil {
 		return exitUsage, err
 	}
-	if providerError := terminalProviderError(agent.Session.Log); providerError != nil {
+	runtimeError := terminalRuntimeError(agent.Session.Log)
+	providerError := terminalProviderError(agent.Session.Log)
+	if options.outputFormat == "ndjson" {
+		writeNDJSON(stdout, agent, ndjsonStatus(providerError, runtimeError))
+		return ndjsonExit(providerError, runtimeError), nil
+	}
+	if runtimeError != nil {
+		if reason, _ := runtimeError.Payload["reason"].(string); reason == "sandbox_violation_limit" {
+			fmt.Fprintf(stderr, "sandbox violation: %s\n", stringValue(runtimeError.Payload["message"]))
+			return exitSandbox, nil
+		}
+	}
+	if providerError != nil {
 		fmt.Fprintf(stderr, "provider error: %s\n", formatProviderError(providerError))
-		return 2, nil
+		flushAssistantMessages(stdout, agent)
+		return exitAgent, nil
+	}
+	if runtimeError != nil {
+		fmt.Fprintf(stderr, "runtime error: %s\n", stringValue(runtimeError.Payload["message"]))
+		flushAssistantMessages(stdout, agent)
+		return exitAgent, nil
 	}
 	fmt.Fprintln(stdout, response.Text)
 	return exitSuccess, nil
@@ -145,6 +166,7 @@ type agentOptions struct {
 	provider     string
 	model        string
 	input        string
+	outputFormat string
 }
 
 func parseAgentOptions(command string, args []string, requireInput bool) (agentOptions, error) {
@@ -155,10 +177,12 @@ func parseAgentOptions(command string, args []string, requireInput bool) (agentO
 	fs.StringVar(&options.model, "model", "", "model override")
 	if requireInput {
 		fs.StringVar(&options.input, "input", "", "user input")
+		fs.StringVar(&options.outputFormat, "output-format", "text", "text or ndjson")
 	}
 	takesValue := map[string]bool{"model": true, "provider": true}
 	if requireInput {
 		takesValue["input"] = true
+		takesValue["output-format"] = true
 	}
 	if err := fs.Parse(permuteFlags(args, takesValue)); err != nil {
 		return options, err
@@ -168,6 +192,9 @@ func parseAgentOptions(command string, args []string, requireInput bool) (agentO
 	}
 	if requireInput && options.input == "" {
 		return options, fmt.Errorf("--input is required")
+	}
+	if options.outputFormat != "" && options.outputFormat != "text" && options.outputFormat != "ndjson" {
+		return options, fmt.Errorf("--output-format must be text or ndjson")
 	}
 	options.manifestPath = fs.Arg(0)
 	return options, nil
@@ -288,6 +315,143 @@ func terminalProviderError(log *harnas.Log) *harnas.Event {
 		return errorEvent
 	}
 	return nil
+}
+
+func terminalRuntimeError(log *harnas.Log) *harnas.Event {
+	events := log.Events()
+	for i := len(events) - 1; i >= 0; i-- {
+		event := events[i]
+		if event.Type != harnas.EventRuntimeError {
+			continue
+		}
+		terminal, _ := event.Payload["terminal"].(bool)
+		if terminal {
+			return &event
+		}
+	}
+	return nil
+}
+
+func flushAssistantMessages(stdout io.Writer, agent *harnas.Agent) {
+	index := 0
+	for _, event := range agent.Session.Log.Events() {
+		if event.Type != harnas.EventAssistantMessage {
+			continue
+		}
+		if index > 0 {
+			fmt.Fprintln(stdout, "---")
+		}
+		fmt.Fprintln(stdout, stringValue(event.Payload["text"]))
+		index++
+	}
+}
+
+func writeNDJSON(stdout io.Writer, agent *harnas.Agent, status string) {
+	started := time.Now()
+	for _, event := range agent.Session.Log.Events() {
+		row := map[string]any{"ts": time.Now().UTC().Format(time.RFC3339)}
+		switch event.Type {
+		case harnas.EventToolUse:
+			row["type"] = "tool_call"
+			row["tool"] = event.Payload["name"]
+			row["input"] = event.Payload["arguments"]
+		case harnas.EventToolResult:
+			row["type"] = "tool_result"
+			if event.Payload["error"] != nil {
+				row["status"] = "error"
+				row["message"] = event.Payload["error"]
+			} else {
+				row["status"] = "success"
+				row["message"] = event.Payload["output"]
+			}
+		case harnas.EventAssistantMessage:
+			if blocks, ok := event.Payload["reasoning"].([]any); ok {
+				for _, block := range blocks {
+					content := stringValue(mapValue(block)["text"])
+					if content == "" {
+						continue
+					}
+					writeJSONLine(stdout, map[string]any{
+						"type":    "thinking",
+						"content": content,
+						"ts":      time.Now().UTC().Format(time.RFC3339),
+					})
+				}
+			}
+			text := stringValue(event.Payload["text"])
+			if text == "" {
+				continue
+			}
+			row["type"] = "agent_text"
+			row["content"] = text
+		case harnas.EventProviderError:
+			row["type"] = "provider_error"
+			row["message"] = event.Payload["message"]
+			row["attempt"] = event.Payload["attempt"]
+		case harnas.EventRuntimeError:
+			row["type"] = "error"
+			row["reason"] = event.Payload["reason"]
+			row["message"] = event.Payload["message"]
+		default:
+			continue
+		}
+		writeJSONLine(stdout, row)
+	}
+	inputTokens, outputTokens := usageTotals(agent.Session.Log)
+	writeJSONLine(stdout, map[string]any{
+		"type":        "done",
+		"status":      status,
+		"tokens_used": map[string]any{"input": inputTokens, "output": outputTokens},
+		"duration_ms": time.Since(started).Milliseconds(),
+		"ts":          time.Now().UTC().Format(time.RFC3339),
+	})
+}
+
+func usageTotals(log *harnas.Log) (int, int) {
+	inputTokens := 0
+	outputTokens := 0
+	for _, event := range log.Events() {
+		if event.Type != harnas.EventAssistantMessage {
+			continue
+		}
+		usage := mapValue(event.Payload["usage"])
+		inputTokens += int(floatValue(usage["input_tokens"]))
+		outputTokens += int(floatValue(usage["output_tokens"]))
+	}
+	return inputTokens, outputTokens
+}
+
+func writeJSONLine(stdout io.Writer, row map[string]any) {
+	encoded, _ := json.Marshal(row)
+	fmt.Fprintln(stdout, string(encoded))
+}
+
+func ndjsonStatus(providerError, runtimeError *harnas.Event) string {
+	if runtimeError != nil {
+		if reason, _ := runtimeError.Payload["reason"].(string); reason == "sandbox_violation_limit" {
+			return "sandbox_violation"
+		} else if reason != "" {
+			return reason
+		}
+		return "failed"
+	}
+	if providerError != nil {
+		return "failed"
+	}
+	return "completed"
+}
+
+func ndjsonExit(providerError, runtimeError *harnas.Event) int {
+	if runtimeError != nil {
+		if reason, _ := runtimeError.Payload["reason"].(string); reason == "sandbox_violation_limit" {
+			return exitSandbox
+		}
+		return exitAgent
+	}
+	if providerError != nil {
+		return exitAgent
+	}
+	return exitSuccess
 }
 
 func formatProviderError(event *harnas.Event) string {
@@ -588,6 +752,24 @@ func stringValue(value any) string {
 		return text
 	}
 	return fmt.Sprint(value)
+}
+
+func mapValue(value any) map[string]any {
+	if typed, ok := value.(map[string]any); ok {
+		return typed
+	}
+	return map[string]any{}
+}
+
+func floatValue(value any) float64 {
+	switch typed := value.(type) {
+	case float64:
+		return typed
+	case int:
+		return float64(typed)
+	default:
+		return 0
+	}
 }
 
 func truncate(value string) string {
