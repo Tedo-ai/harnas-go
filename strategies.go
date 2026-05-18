@@ -1,10 +1,13 @@
 package harnas
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -176,12 +179,19 @@ type WriteSandbox struct {
 }
 
 type RepetitionGuard struct {
-	MaxConsecutiveFailures int
-	MaxIdenticalCalls      int
+	MaxConsecutiveFailures   int
+	MaxIdenticalCalls        int
+	MaxConsecutiveRejections int
 }
 
 type TimeoutGuard struct {
 	TimeoutSeconds int
+}
+
+type HealthGuard struct {
+	Command        string
+	TimeoutSeconds int
+	OnFailure      string
 }
 
 type CostBudgetGuard struct {
@@ -236,6 +246,90 @@ func (c CostBudgetGuard) Install(session *Session) {
 	})
 }
 
+func (h HealthGuard) Install(session *Session) {
+	timeoutSeconds := h.TimeoutSeconds
+	if timeoutSeconds == 0 {
+		timeoutSeconds = 60
+	}
+	onFailure := h.OnFailure
+	if onFailure == "" {
+		onFailure = "refuse_turn"
+	}
+	checks := 0
+	session.Hooks.On("pre_projection", func(ctx map[string]any) any {
+		checks++
+		if checks == 1 {
+			return nil
+		}
+		result := runHealthCheck(h.Command, timeoutSeconds)
+		if result.success {
+			return nil
+		}
+		if onFailure == "warn_only" {
+			session.Log.Append(EventAnnotation, map[string]any{
+				"kind": "guard.health_failed",
+				"data": map[string]any{
+					"output":    result.output,
+					"exit_code": nullableInt(result.exitCode),
+				},
+			})
+			return nil
+		}
+		session.Log.Append(EventRuntimeError, map[string]any{
+			"source":      "strategy",
+			"handler":     "guard/health",
+			"error_class": "Harnas::HealthGuard",
+			"message":     "health_check_failed",
+			"reason":      "health_check_failed",
+			"output":      result.output,
+			"exit_code":   nullableInt(result.exitCode),
+			"terminal":    true,
+		})
+		return nil
+	})
+}
+
+type healthCheckResult struct {
+	success  bool
+	output   string
+	exitCode int
+}
+
+func runHealthCheck(command string, timeoutSeconds int) healthCheckResult {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	output := strings.Join(nonEmptyStrings(stderr.String(), stdout.String()), "\n")
+	if ctx.Err() == context.DeadlineExceeded {
+		if output == "" {
+			output = fmt.Sprintf("health check timed out after %ds", timeoutSeconds)
+		}
+		return healthCheckResult{success: false, output: output}
+	}
+	if err == nil {
+		return healthCheckResult{success: true, output: output}
+	}
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		return healthCheckResult{success: false, output: output, exitCode: exitErr.ExitCode()}
+	}
+	return healthCheckResult{success: false, output: err.Error()}
+}
+
+func nonEmptyStrings(values ...string) []string {
+	out := []string{}
+	for _, value := range values {
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
+}
+
 func usageTotals(log *Log) (int, int) {
 	inputTokens := 0
 	outputTokens := 0
@@ -266,7 +360,12 @@ func (r RepetitionGuard) Install(session *Session) {
 	if maxIdentical == 0 {
 		maxIdentical = 5
 	}
+	maxRejections := r.MaxConsecutiveRejections
+	if maxRejections == 0 {
+		maxRejections = 3
+	}
 	consecutiveFailures := 0
+	consecutiveRejections := 0
 	calls := map[string]int{}
 	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
 		toolUse, _ := ctx["tool_use"].(Event)
@@ -287,6 +386,18 @@ func (r RepetitionGuard) Install(session *Session) {
 			}
 		} else {
 			consecutiveFailures = 0
+		}
+		approval := asMap(nil)
+		if toolResult != nil {
+			approval = asMap(toolResult.Payload["approval"])
+		}
+		if stringValue(approval["decision"]) == "rejected" {
+			consecutiveRejections++
+			if consecutiveRejections >= maxRejections {
+				appendRepetitionRuntimeError(session, "consecutive_rejections", toolUse, consecutiveRejections)
+			}
+		} else {
+			consecutiveRejections = 0
 		}
 		return nil
 	})

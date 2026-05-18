@@ -39,6 +39,7 @@ type ProviderSpec struct {
 	Kind      string `json:"kind"`
 	Model     string `json:"model,omitempty"`
 	MaxTokens int    `json:"max_tokens"`
+	BaseURL   string `json:"base_url,omitempty"`
 }
 
 type ToolSpec struct {
@@ -231,11 +232,11 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 		return nil, err
 	}
 	projection := ProjectionForWithRegistry(manifest.Provider, manifest.System, registry)
-	provider, err := providerFor(manifest.Provider.Kind, options)
+	provider, err := providerFor(manifest.Provider, options)
 	if err != nil {
 		return nil, err
 	}
-	streamProvider, err := streamProviderFor(manifest.Provider.Kind, options)
+	streamProvider, err := streamProviderFor(manifest.Provider, options)
 	if err != nil {
 		return nil, err
 	}
@@ -492,12 +493,19 @@ func BuildStrategiesWithRuntime(
 			}})
 		case "guard/repetition":
 			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: RepetitionGuard{
-				MaxConsecutiveFailures: intValue(spec.Config["max_consecutive_failures"]),
-				MaxIdenticalCalls:      intValue(spec.Config["max_identical_calls"]),
+				MaxConsecutiveFailures:   intValue(spec.Config["max_consecutive_failures"]),
+				MaxIdenticalCalls:        intValue(spec.Config["max_identical_calls"]),
+				MaxConsecutiveRejections: intValue(spec.Config["max_consecutive_rejections"]),
 			}})
 		case "guard/timeout":
 			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: TimeoutGuard{
 				TimeoutSeconds: intValue(spec.Config["timeout_seconds"]),
+			}})
+		case "guard/health":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: HealthGuard{
+				Command:        stringValue(spec.Config["command"]),
+				TimeoutSeconds: intValue(spec.Config["timeout_seconds"]),
+				OnFailure:      stringValue(spec.Config["on_failure"]),
 			}})
 		case "guard/cost_budget":
 			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: CostBudgetGuard{
@@ -599,7 +607,7 @@ func ProjectionFor(provider ProviderSpec, system string) Projection {
 
 func ProjectionForWithRegistry(provider ProviderSpec, system string, registry *Registry) Projection {
 	switch provider.Kind {
-	case "openai":
+	case "openai", "ollama":
 		return OpenAIProjection{Model: provider.Model, System: system, Registry: registry}
 	case "gemini":
 		return GeminiProjection{Model: provider.Model, System: system, Registry: registry}
@@ -615,7 +623,7 @@ func ProjectionForWithRegistry(provider ProviderSpec, system string, registry *R
 
 func IngestorFor(kind string) Ingestor {
 	switch kind {
-	case "openai":
+	case "openai", "ollama":
 		return OpenAIIngestor{}
 	case "gemini":
 		return &GeminiIngestor{}
@@ -624,7 +632,8 @@ func IngestorFor(kind string) Ingestor {
 	}
 }
 
-func providerFor(kind string, options ManifestOptions) (Provider, error) {
+func providerFor(provider ProviderSpec, options ManifestOptions) (Provider, error) {
+	kind := provider.Kind
 	if options.Providers != nil {
 		if provider := options.Providers[kind]; provider != nil {
 			return provider, nil
@@ -632,6 +641,13 @@ func providerFor(kind string, options ManifestOptions) (Provider, error) {
 	}
 	if kind == "mock" {
 		return MockProvider{}, nil
+	}
+	if kind == "ollama" {
+		baseURL := provider.BaseURL
+		if baseURL == "" {
+			baseURL = os.Getenv("OLLAMA_BASE_URL")
+		}
+		return NewOllamaProvider(baseURL), nil
 	}
 	key := apiKeyFor(kind, options.APIKeys)
 	if key == "" {
@@ -649,7 +665,8 @@ func providerFor(kind string, options ManifestOptions) (Provider, error) {
 	}
 }
 
-func streamProviderFor(kind string, options ManifestOptions) (StreamProvider, error) {
+func streamProviderFor(provider ProviderSpec, options ManifestOptions) (StreamProvider, error) {
+	kind := provider.Kind
 	if options.StreamProviders != nil {
 		if provider := options.StreamProviders[kind]; provider != nil {
 			return provider, nil
@@ -657,6 +674,13 @@ func streamProviderFor(kind string, options ManifestOptions) (StreamProvider, er
 	}
 	if kind == "mock" {
 		return nil, nil
+	}
+	if kind == "ollama" {
+		baseURL := provider.BaseURL
+		if baseURL == "" {
+			baseURL = os.Getenv("OLLAMA_BASE_URL")
+		}
+		return NewOllamaStreamProvider(baseURL), nil
 	}
 	key := apiKeyFor(kind, options.APIKeys)
 	if key == "" {
@@ -694,7 +718,7 @@ func apiKeyFor(kind string, explicit map[string]string) string {
 
 func knownProvider(kind string) bool {
 	switch kind {
-	case "anthropic", "openai", "gemini", "mock":
+	case "anthropic", "openai", "gemini", "ollama", "mock":
 		return true
 	default:
 		return false
@@ -706,7 +730,7 @@ func knownStrategy(name string) bool {
 	case "Compaction::MarkerTail", "Compaction::SummaryTail",
 		"Compaction::TokenMarkerTail", "Compaction::ToolOutputCap",
 		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval",
-		"sandbox/write", "guard/repetition", "guard/timeout", "guard/cost_budget":
+		"sandbox/write", "guard/repetition", "guard/timeout", "guard/health", "guard/cost_budget":
 		return true
 	default:
 		return false

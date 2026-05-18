@@ -272,6 +272,10 @@ func (l AgentLoop) dispatchPendingTools() []Event {
 				"tool_use_id": toolUse.Payload["id"],
 				"output":      nil,
 				"error":       "denied by hook: " + reason,
+				"approval": map[string]any{
+					"decision": "rejected",
+					"reason":   reason,
+				},
 			})
 		} else {
 			l.Runner.Run(toolUse, l.Session.Log)

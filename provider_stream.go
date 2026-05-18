@@ -44,6 +44,7 @@ type OpenAIStreamProvider struct {
 	APIKey   string
 	Endpoint string
 	Client   HTTPDoer
+	NoAuth   bool
 }
 
 func NewOpenAIStreamProvider(apiKey string) OpenAIStreamProvider {
@@ -58,11 +59,31 @@ func (p OpenAIStreamProvider) Call(request map[string]any, emit func(EventArgs))
 	if endpoint == "" {
 		endpoint = OpenAIEndpoint
 	}
-	return streamSSE(p.client(), endpoint, map[string]string{
-		"authorization": "Bearer " + p.APIKey,
-		"content-type":  "application/json",
-		"accept":        "text/event-stream",
-	}, body, newOpenAIStreamState(emit))
+	headers := map[string]string{
+		"content-type": "application/json",
+		"accept":       "text/event-stream",
+	}
+	if !p.NoAuth {
+		headers["authorization"] = "Bearer " + p.APIKey
+	}
+	return streamSSE(p.client(), endpoint, headers, body, newOpenAIStreamState(emit))
+}
+
+type OllamaStreamProvider struct {
+	BaseURL string
+	Client  HTTPDoer
+}
+
+func NewOllamaStreamProvider(baseURL string) OllamaStreamProvider {
+	return OllamaStreamProvider{BaseURL: baseURL}
+}
+
+func (p OllamaStreamProvider) Call(request map[string]any, emit func(EventArgs)) error {
+	return (OpenAIStreamProvider{
+		Endpoint: ollamaChatEndpoint(p.BaseURL),
+		Client:   p.Client,
+		NoAuth:   true,
+	}).Call(request, emit)
 }
 
 type GeminiStreamProvider struct {

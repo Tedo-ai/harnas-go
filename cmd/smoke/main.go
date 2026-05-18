@@ -10,7 +10,7 @@ import (
 )
 
 func main() {
-	provider := flag.String("provider", "", "anthropic|openai|gemini")
+	provider := flag.String("provider", "", "anthropic|openai|gemini|ollama")
 	model := flag.String("model", "", "model identifier")
 	streamOnly := flag.Bool("stream-only", false, "only test streaming provider")
 	bufferedOnly := flag.Bool("buffered-only", false, "only test buffered provider")
@@ -18,7 +18,7 @@ func main() {
 
 	prompt := strings.Join(flag.Args(), " ")
 	if *provider == "" || prompt == "" {
-		fmt.Fprintln(os.Stderr, "usage: smoke --provider anthropic|openai|gemini [--model MODEL] <prompt>")
+		fmt.Fprintln(os.Stderr, "usage: smoke --provider anthropic|openai|gemini|ollama [--model MODEL] <prompt>")
 		os.Exit(1)
 	}
 	if *streamOnly && *bufferedOnly {
@@ -27,7 +27,7 @@ func main() {
 	}
 	modelName := resolveModel(*provider, *model)
 	apiKey := resolveAPIKey(*provider)
-	if apiKey == "" {
+	if *provider != "ollama" && apiKey == "" {
 		fmt.Fprintf(os.Stderr, "error: %s_API_KEY is not set\n", strings.ToUpper(*provider))
 		os.Exit(1)
 	}
@@ -35,13 +35,13 @@ func main() {
 
 	if !*streamOnly {
 		text, err := callBuffered(*provider, apiKey, request)
-		must("buffered", err)
+		must(*provider, "buffered", err)
 		requireText("buffered", text)
 		fmt.Printf("[buffered] %s\n", text)
 	}
 	if !*bufferedOnly {
 		text, err := callStreaming(*provider, apiKey, request)
-		must("streaming", err)
+		must(*provider, "streaming", err)
 		requireText("streaming", text)
 		fmt.Printf("[streaming] %s\n", text)
 	}
@@ -62,6 +62,8 @@ func resolveModel(provider, explicit string) string {
 		return "gpt-5.4-mini"
 	case "gemini":
 		return "gemini-flash-latest"
+	case "ollama":
+		return "llama3.2"
 	default:
 		return ""
 	}
@@ -73,7 +75,7 @@ func resolveAPIKey(provider string) string {
 
 func requestFor(provider, model, prompt string) map[string]any {
 	switch provider {
-	case "openai":
+	case "openai", "ollama":
 		return map[string]any{
 			"model":    model,
 			"messages": []any{map[string]any{"role": "user", "content": prompt}},
@@ -105,6 +107,10 @@ func callBuffered(provider, apiKey string, request map[string]any) (string, erro
 		response, err := harnas.NewOpenAIProvider(apiKey).Call(request)
 		choice := firstMap(response["choices"])
 		return stringValue(asMap(choice["message"])["content"]), err
+	case "ollama":
+		response, err := harnas.NewOllamaProvider(os.Getenv("OLLAMA_BASE_URL")).Call(request)
+		choice := firstMap(response["choices"])
+		return stringValue(asMap(choice["message"])["content"]), err
 	case "gemini":
 		response, err := harnas.NewGeminiProvider(apiKey).Call(request)
 		candidate := firstMap(response["candidates"])
@@ -128,6 +134,8 @@ func callStreaming(provider, apiKey string, request map[string]any) (string, err
 		err = harnas.NewAnthropicStreamProvider(apiKey).Call(request, emit)
 	case "openai":
 		err = harnas.NewOpenAIStreamProvider(apiKey).Call(request, emit)
+	case "ollama":
+		err = harnas.NewOllamaStreamProvider(os.Getenv("OLLAMA_BASE_URL")).Call(request, emit)
 	case "gemini":
 		err = harnas.NewGeminiStreamProvider(apiKey).Call(request, emit)
 	default:
@@ -136,9 +144,13 @@ func callStreaming(provider, apiKey string, request map[string]any) (string, err
 	return final, err
 }
 
-func must(mode string, err error) {
+func must(provider, mode string, err error) {
 	if err == nil {
 		return
+	}
+	if provider == "ollama" {
+		fmt.Fprintf(os.Stderr, "skip: Ollama is not reachable (%v)\n", err)
+		os.Exit(0)
 	}
 	fmt.Fprintf(os.Stderr, "error: %s smoke failed: %v\n", mode, err)
 	os.Exit(1)

@@ -8,16 +8,16 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.12.0** (2026-05-18). Tracks Harnas spec 0.12.0.
+**Version 0.13.0** (2026-05-18). Tracks Harnas spec 0.13.0.
 
 ## Status
 
-- Agent conformance: 39/39 fixtures passing
+- Agent conformance: 41/41 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
-- Buffered HTTP providers for Anthropic, OpenAI, and Gemini
-- Streaming HTTP providers for Anthropic, OpenAI, and Gemini
+- Buffered HTTP providers for Anthropic, OpenAI, Gemini, and local Ollama
+- Streaming HTTP providers for Anthropic, OpenAI, Gemini, and local Ollama
 - Built-in tools: read_file, write_file, edit_file, list_dir, glob,
   grep, run_shell, fetch_url, load_skill, bash_session, with
   manifest-ready descriptors
@@ -25,7 +25,7 @@ surfaces needed for real Go adoption.
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks and observation bus, MarkerTail, TokenMarkerTail, SummaryTail,
   and ToolOutputCap compaction, AlwaysAllow, DenyByName, HumanApproval,
-  sandbox/write, repetition, timeout, and cost-budget guards
+  sandbox/write, repetition, health, timeout, and cost-budget guards
 - Scripted provider errors and provider_error Log events
 - Observation-only streaming transport events plus DeltaLogger sidecar
   persistence for debugging
@@ -42,6 +42,7 @@ bin/harnas run manifest.json --input "hello"
 bin/harnas chat manifest.json
 bin/harnas inspect session.jsonl
 bin/smoke-anthropic "say hello in one word"
+bin/smoke-ollama "say hello in one word"
 ```
 
 Library use:
@@ -75,18 +76,21 @@ bin/harnas project session.jsonl --manifest manifest.json [--from-seq N] [--to-s
 
 `project` renders the provider request body from a saved Log slice
 without making a provider call. It supports the conformance-facing
-Anthropic, OpenAI, and Gemini projections.
+Anthropic, OpenAI-compatible, and Gemini projections.
 
 ## Live providers
 
 Set `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `GEMINI_API_KEY` to run
-the live smoke scripts. Each smoke script exercises both the buffered
-and streaming provider for that backend:
+the remote live smoke scripts. Ollama uses `OLLAMA_BASE_URL` when set
+and otherwise defaults to `http://localhost:11434/v1`; its smoke skips
+cleanly when Ollama is not running. Each smoke script exercises both the
+buffered and streaming provider for that backend:
 
 ```sh
 bin/smoke-anthropic "say hello in one word"
 bin/smoke-openai "say hello in one word"
 bin/smoke-gemini "say hello in one word"
+bin/smoke-ollama "say hello in one word"
 ```
 
 ## bash_session

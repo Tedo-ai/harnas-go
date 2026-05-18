@@ -236,6 +236,8 @@ func resolveModel(provider, explicit string) string {
 		return "gpt-5.4-mini"
 	case "gemini":
 		return "gemini-flash-latest"
+	case "ollama":
+		return "llama3.2"
 	default:
 		return ""
 	}

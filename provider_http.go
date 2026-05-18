@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 )
 
 const (
 	AnthropicEndpoint     = "https://api.anthropic.com/v1/messages"
 	AnthropicAPIVersion   = "2023-06-01"
 	OpenAIEndpoint        = "https://api.openai.com/v1/chat/completions"
+	OllamaBaseURL         = "http://localhost:11434/v1"
 	GeminiEndpointBase    = "https://generativelanguage.googleapis.com/v1beta/models"
 	GeminiGenerateContent = "generateContent"
 )
@@ -73,6 +75,7 @@ type OpenAIProvider struct {
 	APIKey   string
 	Endpoint string
 	Client   HTTPDoer
+	NoAuth   bool
 }
 
 func NewOpenAIProvider(apiKey string) OpenAIProvider {
@@ -84,11 +87,31 @@ func (p OpenAIProvider) Call(request map[string]any) (map[string]any, error) {
 	if endpoint == "" {
 		endpoint = OpenAIEndpoint
 	}
-	return postJSON(p.client(), endpoint, map[string]string{
-		"authorization": "Bearer " + p.APIKey,
-		"content-type":  "application/json",
-		"accept":        "application/json",
-	}, request)
+	headers := map[string]string{
+		"content-type": "application/json",
+		"accept":       "application/json",
+	}
+	if !p.NoAuth {
+		headers["authorization"] = "Bearer " + p.APIKey
+	}
+	return postJSON(p.client(), endpoint, headers, request)
+}
+
+type OllamaProvider struct {
+	BaseURL string
+	Client  HTTPDoer
+}
+
+func NewOllamaProvider(baseURL string) OllamaProvider {
+	return OllamaProvider{BaseURL: baseURL}
+}
+
+func (p OllamaProvider) Call(request map[string]any) (map[string]any, error) {
+	return (OpenAIProvider{
+		Endpoint: ollamaChatEndpoint(p.BaseURL),
+		Client:   p.Client,
+		NoAuth:   true,
+	}).Call(request)
 }
 
 type GeminiProvider struct {
@@ -131,6 +154,17 @@ func (p OpenAIProvider) client() HTTPDoer {
 		return p.Client
 	}
 	return http.DefaultClient
+}
+
+func ollamaChatEndpoint(baseURL string) string {
+	base := strings.TrimRight(baseURL, "/")
+	if base == "" {
+		base = OllamaBaseURL
+	}
+	if strings.HasSuffix(base, "/v1") {
+		return base + "/chat/completions"
+	}
+	return base + "/v1/chat/completions"
 }
 
 func (p GeminiProvider) client() HTTPDoer {
