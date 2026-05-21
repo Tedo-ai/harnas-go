@@ -1,5 +1,11 @@
 package harnas
 
+import (
+	"os"
+	"path/filepath"
+	"strings"
+)
+
 // Runtime is a convenience wrapper around manifest loading plus optional
 // Session resume/save.
 type Runtime struct {
@@ -15,6 +21,9 @@ type RuntimeConfig struct {
 }
 
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
+	if config.Options.AttachmentStore == nil {
+		config.Options.AttachmentStore = NewFilesystemStore(DefaultAttachmentRoot(config.SessionPath))
+	}
 	loaded, err := LoadManifest(config.ManifestPath, config.Options)
 	if err != nil {
 		return nil, err
@@ -51,4 +60,19 @@ func (r *Runtime) Loop() AgentLoop {
 
 func (r *Runtime) Save(path string) error {
 	return r.Loaded.Session.Save(path)
+}
+
+func DefaultAttachmentRoot(sessionPath string) string {
+	if sessionPath != "" {
+		ext := filepath.Ext(sessionPath)
+		if ext != "" {
+			return strings.TrimSuffix(sessionPath, ext) + ".attachments"
+		}
+		return sessionPath + ".attachments"
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		home = "."
+	}
+	return filepath.Join(home, ".harnas", "runs", "attachments")
 }

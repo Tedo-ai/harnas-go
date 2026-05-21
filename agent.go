@@ -32,7 +32,11 @@ func AgentFromSession(session *Session, path string, options ManifestOptions) (*
 }
 
 func (a *Agent) Chat(text string) (Response, error) {
-	a.Session.Log.Append(EventUserMessage, map[string]any{"text": text})
+	return a.ChatPayload(map[string]any{"text": text})
+}
+
+func (a *Agent) ChatPayload(payload map[string]any) (Response, error) {
+	a.Session.Log.Append(EventUserMessage, payload)
 	loop := a.Loaded.Loop()
 	loop.Session = a.Session
 	reason, err := loop.Run()
@@ -49,10 +53,14 @@ func (a *Agent) Chat(text string) (Response, error) {
 }
 
 func (a *Agent) Stream(text string, onDelta func(Event)) (Response, error) {
+	return a.StreamPayload(map[string]any{"text": text}, onDelta)
+}
+
+func (a *Agent) StreamPayload(payload map[string]any, onDelta func(Event)) (Response, error) {
 	if a.Loaded.StreamProvider == nil {
-		return a.Chat(text)
+		return a.ChatPayload(payload)
 	}
-	a.Session.Log.Append(EventUserMessage, map[string]any{"text": text})
+	a.Session.Log.Append(EventUserMessage, payload)
 	loop := a.Loaded.Loop()
 	loop.Session = a.Session
 	loop.OnStreamEvent = onDelta

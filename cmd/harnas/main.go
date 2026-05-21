@@ -69,7 +69,7 @@ func usage(w io.Writer) {
   harnas fork <session.jsonl> --at-seq N --out <new.jsonl>
   harnas inspect <session.jsonl> [--json]
   harnas project <session.jsonl> --manifest PATH [--from-seq N] [--to-seq M]
-  harnas run <manifest> --input TEXT [--provider KIND] [--model MODEL]
+  harnas run <manifest> --input TEXT [--input-file PATH] [--provider KIND] [--model MODEL]
 `)
 }
 
@@ -169,7 +169,15 @@ func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
 			break
 		}
 		streamed := false
-		response, err := agent.Stream(input, func(event harnas.Event) {
+		payload := map[string]any{"text": input}
+		if len(options.inputFiles) > 0 {
+			content, err := harnas.ContentBlocksForInput(input, options.inputFiles)
+			if err != nil {
+				return err
+			}
+			payload = map[string]any{"content": content}
+		}
+		response, err := agent.StreamPayload(payload, func(event harnas.Event) {
 			if event.Type == harnas.EventAssistantTextDelta {
 				streamed = true
 				fmt.Fprint(stdout, event.Payload["chunk"])
@@ -203,7 +211,15 @@ func runOnce(args []string, stdout, stderr io.Writer) (int, error) {
 	if err != nil {
 		return exitUsage, err
 	}
-	response, err := agent.Chat(options.input)
+	payload := map[string]any{"text": options.input}
+	if len(options.inputFiles) > 0 {
+		content, err := harnas.ContentBlocksForInput(options.input, options.inputFiles)
+		if err != nil {
+			return exitUsage, err
+		}
+		payload = map[string]any{"content": content}
+	}
+	response, err := agent.ChatPayload(payload)
 	if err != nil {
 		return exitUsage, err
 	}
@@ -241,6 +257,7 @@ type agentOptions struct {
 	provider     string
 	model        string
 	input        string
+	inputFiles   []string
 	outputFormat string
 }
 
@@ -250,11 +267,15 @@ func parseAgentOptions(command string, args []string, requireInput bool) (agentO
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&options.provider, "provider", "", "provider override")
 	fs.StringVar(&options.model, "model", "", "model override")
+	fs.Func("input-file", "attach an image or PDF file to the user message", func(value string) error {
+		options.inputFiles = append(options.inputFiles, value)
+		return nil
+	})
 	if requireInput {
 		fs.StringVar(&options.input, "input", "", "user input")
 		fs.StringVar(&options.outputFormat, "output-format", "text", "text or ndjson")
 	}
-	takesValue := map[string]bool{"model": true, "provider": true}
+	takesValue := map[string]bool{"model": true, "provider": true, "input-file": true}
 	if requireInput {
 		takesValue["input"] = true
 		takesValue["output-format"] = true

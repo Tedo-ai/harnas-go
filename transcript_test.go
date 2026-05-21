@@ -39,3 +39,35 @@ func TestTranscriptProjectCanHideTools(t *testing.T) {
 		t.Fatalf("expected no items, got %#v", items)
 	}
 }
+
+func TestTranscriptProjectRendersContentBlocks(t *testing.T) {
+	log := NewLog()
+	log.Append(EventUserMessage, map[string]any{"content": []any{
+		map[string]any{"type": "text", "text": "see this"},
+		map[string]any{
+			"type":       "image",
+			"media_type": "image/png",
+			"name":       "chart.png",
+			"source":     map[string]any{"kind": "base64", "data": "aW1n"},
+		},
+	}})
+
+	items := TranscriptProject(log, DefaultTranscriptOptions())
+	if got := items[0]["text"]; got != "see this\n[image: chart.png: image/png: 3 bytes]" {
+		t.Fatalf("unexpected transcript text: %#v", got)
+	}
+}
+
+func TestTranscriptProjectUsesCustomContentPlaceholder(t *testing.T) {
+	log := NewLog()
+	log.Append(EventUserMessage, map[string]any{"content": []any{
+		map[string]any{"type": "document", "media_type": "application/pdf"},
+	}})
+
+	items := TranscriptProject(log, TranscriptOptions{
+		ContentPlaceholder: func(_ map[string]any) string { return "[attachment]" },
+	})
+	if got := items[0]["text"]; got != "[attachment]" {
+		t.Fatalf("unexpected transcript text: %#v", got)
+	}
+}

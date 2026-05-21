@@ -68,3 +68,11 @@ func TestRuntimeResumesSavedSession(t *testing.T) {
 		t.Fatalf("session was not resumed")
 	}
 }
+
+func TestDefaultAttachmentRootUsesSessionPath(t *testing.T) {
+	got := DefaultAttachmentRoot(filepath.Join("tmp", "run.jsonl"))
+	want := filepath.Join("tmp", "run.attachments")
+	if got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
