@@ -66,7 +66,14 @@ type HookSpec struct {
 
 type ToolHandler func(map[string]any) (string, error)
 type ConfiguredToolHandler func(map[string]any, map[string]any) (string, error)
+type ToolHandlerV2 = ConfiguredToolHandler
 type ApprovalHandler func(Event) bool
+
+func WrapV1Handler(handler ToolHandler) ToolHandlerV2 {
+	return func(args map[string]any, _ map[string]any) (string, error) {
+		return handler(args)
+	}
+}
 
 type ManifestOptions struct {
 	ToolHandlers       map[string]ToolHandler

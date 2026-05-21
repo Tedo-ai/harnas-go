@@ -2,6 +2,15 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [Unreleased]
+
+### Added
+
+- Tool handlers may now use the explicit `ToolHandlerV2` /
+  `ConfiguredToolHandler` shape to receive the tool manifest config map.
+  Existing single-argument `ToolHandler` callables continue to work
+  unchanged; `WrapV1Handler` adapts them when a V2 handler is required.
+
 ## [0.14.1] — 2026-05-21
 
 ### Added

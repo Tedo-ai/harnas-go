@@ -105,6 +105,60 @@ func TestLoadManifestRejectsUnresolvedToolHandler(t *testing.T) {
 	}
 }
 
+func TestConfiguredToolHandlerReceivesManifestConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.json")
+	mustWrite(t, path, `{
+		"harnas_version":"0.1",
+		"name":"configured-tool",
+		"provider":{"kind":"mock","max_tokens":1},
+		"tools":[{
+			"name":"echo",
+			"handler":"test.configured",
+			"description":"Echo configured value.",
+			"input_schema":{"type":"object"},
+			"config":{"prefix":"cfg"}
+		}],
+		"strategies":[]
+	}`)
+
+	loaded, err := LoadManifest(path, ManifestOptions{
+		ConfiguredHandlers: map[string]ConfiguredToolHandler{
+			"test.configured": func(args map[string]any, config map[string]any) (string, error) {
+				return stringValue(config["prefix"]) + ":" + stringValue(args["text"]), nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := loaded.Session.Log.Append(EventToolUse, map[string]any{
+		"id":        "toolu_1",
+		"name":      "echo",
+		"arguments": map[string]any{"text": "hello"},
+	})
+	(&Runner{Registry: loaded.Registry}).Run(event, loaded.Session.Log)
+	result := loaded.Session.Log.Events()[1]
+	if result.Payload["output"] != "cfg:hello" {
+		t.Fatalf("expected configured output, got %#v", result.Payload)
+	}
+}
+
+func TestWrapV1HandlerKeepsSingleArgumentHandlersCompatible(t *testing.T) {
+	wrapped := WrapV1Handler(func(args map[string]any) (string, error) {
+		return stringValue(args["text"]), nil
+	})
+
+	output, err := wrapped(map[string]any{"text": "hello"}, map[string]any{"ignored": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if output != "hello" {
+		t.Fatalf("expected hello, got %q", output)
+	}
+}
+
 func TestLoadManifestRejectsSchemaShapeProblems(t *testing.T) {
 	cases := map[string]string{
 		"missing strategies": `{
