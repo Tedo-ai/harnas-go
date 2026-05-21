@@ -31,7 +31,9 @@ surfaces needed for real Go adoption.
 - Observation-only streaming transport events plus DeltaLogger sidecar
   persistence for debugging
 - Adopter helper APIs: `NewRuntime`, `TranscriptProject`,
-  `ToolDescriptors`, and `ManifestSnapshotMetadata`
+  `ToolDescriptors`, `ManifestSnapshotMetadata`, and delegation
+  projections (`DelegationTree`, `DescendantTimeline`, `OpenChildren`,
+  `DescendantUsage`)
 - MCP adapter package: HTTP and stdio transports, content flattening,
   Harnas tool descriptor translation, and degraded startup handling
 
