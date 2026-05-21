@@ -8,11 +8,11 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.16.0** (2026-05-21). Tracks Harnas spec 0.16.0.
+**Version 0.17.0** (2026-05-21). Tracks Harnas spec 0.17.0.
 
 ## Status
 
-- Agent conformance: 46/46 fixtures passing
+- Agent conformance: 54/54 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
