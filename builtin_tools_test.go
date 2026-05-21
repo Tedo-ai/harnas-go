@@ -21,6 +21,7 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 		"harnas.builtin.grep",
 		"harnas.builtin.run_shell",
 		"harnas.builtin.fetch_url",
+		"harnas.builtin.spawn_agent",
 		"harnas.builtin.load_skill",
 		"harnas.builtin.bash_session",
 	} {
@@ -32,8 +33,8 @@ func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
 
 func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
 	descriptors := BuiltinDescriptors()
-	if len(descriptors) != 10 {
-		t.Fatalf("expected 10 descriptors, got %d", len(descriptors))
+	if len(descriptors) != 11 {
+		t.Fatalf("expected 11 descriptors, got %d", len(descriptors))
 	}
 	byName := map[string]ToolSpec{}
 	for _, descriptor := range descriptors {
@@ -42,7 +43,7 @@ func TestBuiltinDescriptorsExposeCanonicalToolSchemas(t *testing.T) {
 			t.Fatalf("incomplete descriptor: %#v", descriptor)
 		}
 	}
-	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url", "load_skill", "bash_session"} {
+	for _, name := range []string{"read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "run_shell", "fetch_url", "spawn_agent", "load_skill", "bash_session"} {
 		if byName[name].Name == "" {
 			t.Fatalf("missing descriptor %s", name)
 		}

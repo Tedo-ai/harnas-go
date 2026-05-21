@@ -70,6 +70,10 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 		})
 		return
 	}
+	if tool.Handler == "harnas.builtin.spawn_agent" {
+		r.runSpawnAgent(toolUse, log, args)
+		return
+	}
 	if tool.Handler == "conformance.raise_error" {
 		log.Append(EventToolResult, map[string]any{
 			"tool_use_id": id,
@@ -130,6 +134,57 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 	log.Append(EventToolResult, map[string]any{
 		"tool_use_id": id,
 		"output":      fmt.Sprintf("[conformance stub: %s(%s)]", tool.Handler, string(encoded)),
+		"error":       nil,
+	})
+}
+
+func (r *Runner) runSpawnAgent(toolUse Event, log *Log, args map[string]any) {
+	toolUseID, _ := toolUse.Payload["id"].(string)
+	task, _ := args["task"].(string)
+	if task == "" {
+		log.Append(EventToolResult, map[string]any{
+			"tool_use_id": toolUseID,
+			"output":      nil,
+			"error":       "missing required argument: task",
+		})
+		return
+	}
+	spawnID := "spn_" + newID()
+	childSessionID := "ses_" + newID()
+	metadata := map[string]any{}
+	if label, ok := args["label"].(string); ok && label != "" {
+		metadata["label"] = label
+	}
+	if role, ok := args["role"].(string); ok && role != "" {
+		metadata["role"] = role
+	}
+	overrides := map[string]any{}
+	if toolsDeny, ok := args["tools_deny"]; ok {
+		overrides["tools_deny"] = toolsDeny
+	}
+	joinPolicy := "async"
+	if value, ok := args["join_policy"].(string); ok && value != "" {
+		joinPolicy = value
+	}
+	log.Append(EventAgentSpawn, map[string]any{
+		"spawn_id":            spawnID,
+		"child_session_id":    childSessionID,
+		"spawned_by_event_id": toolUse.ID,
+		"spawn_mode":          "new",
+		"task":                task,
+		"capabilities":        map[string]any{"inherit": true, "overrides": overrides},
+		"join_policy":         joinPolicy,
+		"metadata":            metadata,
+		"retry_of_spawn_id":   nil,
+	})
+	output, _ := json.Marshal(map[string]any{
+		"spawn_id":         spawnID,
+		"child_session_id": childSessionID,
+		"status":           "spawned",
+	})
+	log.Append(EventToolResult, map[string]any{
+		"tool_use_id": toolUseID,
+		"output":      string(output),
 		"error":       nil,
 	})
 }

@@ -31,6 +31,9 @@ func BuiltinHandlers() map[string]ToolHandler {
 		"harnas.builtin.grep":       BuiltinGrep,
 		"harnas.builtin.run_shell":  BuiltinRunShell,
 		"harnas.builtin.fetch_url":  BuiltinFetchURL,
+		"harnas.builtin.spawn_agent": func(map[string]any) (string, error) {
+			return "", fmt.Errorf("spawn_agent is handled by Runner")
+		},
 		"harnas.builtin.load_skill": func(args map[string]any) (string, error) {
 			return BuiltinLoadSkill(args, nil)
 		},
@@ -179,6 +182,21 @@ func BuiltinDescriptors() []ToolSpec {
 					"timeout_ms": map[string]any{"type": "integer", "minimum": float64(1)},
 					"env":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
 				},
+			},
+		},
+		{
+			Name:        "spawn_agent",
+			Handler:     "harnas.builtin.spawn_agent",
+			Description: "Create a child agent Session receipt for a delegated task. Products run and join the child according to their supervisor policy.",
+			InputSchema: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"task":       map[string]any{"type": "string"},
+					"label":      map[string]any{"type": "string"},
+					"role":       map[string]any{"type": "string"},
+					"tools_deny": map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+				"required": []any{"task"},
 			},
 		},
 	}
