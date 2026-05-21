@@ -8,11 +8,11 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.13.0** (2026-05-18). Tracks Harnas spec 0.13.0.
+**Version 0.14.0** (2026-05-21). Tracks Harnas spec 0.14.0.
 
 ## Status
 
-- Agent conformance: 41/41 fixtures passing
+- Agent conformance: 45/45 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
@@ -25,7 +25,8 @@ surfaces needed for real Go adoption.
 - Anthropic, OpenAI, and Gemini fixture ingestors
 - Session-scoped hooks and observation bus, MarkerTail, TokenMarkerTail, SummaryTail,
   and ToolOutputCap compaction, AlwaysAllow, DenyByName, HumanApproval,
-  sandbox/write, repetition, health, timeout, and cost-budget guards
+  sandbox/write, sandbox/network, repetition, health, timeout, and
+  cost-budget guards
 - Scripted provider errors and provider_error Log events
 - Observation-only streaming transport events plus DeltaLogger sidecar
   persistence for debugging

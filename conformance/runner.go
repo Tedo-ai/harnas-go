@@ -159,6 +159,10 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 	}
 	registry := harnas.NewRegistry()
 	builtinHandlers := harnas.BuiltinHandlers()
+	builtinHandlers["harnas.builtin.fetch_url"] = func(args map[string]any) (string, error) {
+		encoded, _ := json.Marshal(args)
+		return "[conformance stub: harnas.builtin.fetch_url(" + string(encoded) + ")]", nil
+	}
 	configuredHandlers := harnas.BuiltinConfiguredHandlers()
 	for _, tool := range manifest.Tools {
 		registered := harnas.Tool{

@@ -64,7 +64,7 @@ func TestBuiltinReadWriteEditFile(t *testing.T) {
 		t.Fatalf("unexpected result: %s", result)
 	}
 	body, err := BuiltinReadFile(map[string]any{"path": path})
-	if err != nil || body != "alpha\nbravo\n" {
+	if err != nil || body != "     1\talpha\n     2\tbravo\n" {
 		t.Fatalf("unexpected read: %q %v", body, err)
 	}
 	_, err = BuiltinEditFile(map[string]any{"path": path, "old_string": "bravo", "new_string": "BRAVO"})
@@ -73,6 +73,32 @@ func TestBuiltinReadWriteEditFile(t *testing.T) {
 	}
 	if string(mustRead(t, path)) != "alpha\nBRAVO\n" {
 		t.Fatalf("edit failed")
+	}
+}
+
+func TestBuiltinReadFileOffsetLimitAndBinaryGuard(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "note.txt")
+	mustWrite(t, path, "one\ntwo\nthree\n")
+	body, err := BuiltinReadFile(map[string]any{"path": path, "offset": float64(1), "limit": float64(1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "     2\ttwo\n... [file has 3 total lines; showing 1–2]\n" {
+		t.Fatalf("unexpected limited read: %q", body)
+	}
+	body, err = BuiltinReadFile(map[string]any{"path": path, "offset": float64(10)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if body != "... [file has 3 total lines; offset 10 is past EOF]\n" {
+		t.Fatalf("unexpected past EOF read: %q", body)
+	}
+	binary := filepath.Join(dir, "binary.bin")
+	mustWrite(t, binary, "abc\x00def")
+	_, err = BuiltinReadFile(map[string]any{"path": binary})
+	if err == nil || !strings.Contains(err.Error(), "Cannot read binary file") {
+		t.Fatalf("expected binary error, got %v", err)
 	}
 }
 
@@ -205,6 +231,36 @@ func TestBashSessionReportsCommandLocalOutput(t *testing.T) {
 	}
 	if second.Stderr != "second" || second.CommandStderr != "second" {
 		t.Fatalf("expected command-local stderr, got %#v", second)
+	}
+}
+
+func TestBashSessionPerCommandEnvDoesNotPersist(t *testing.T) {
+	registry := NewBashSessionRegistry()
+	defer registry.Close()
+	config := map[string]any{"cwd": t.TempDir(), "max_output_bytes": float64(4096)}
+
+	first := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "echo $MYVAR",
+		"env":        map[string]any{"MYVAR": "hello $USER"},
+	}, config)
+	if first.CommandStdout != "hello $USER\n" {
+		t.Fatalf("unexpected env output: %#v", first)
+	}
+	second := mustBashSession(t, registry, map[string]any{
+		"session_id": "s1",
+		"command":    "echo $MYVAR",
+	}, config)
+	if second.CommandStdout != "\n" {
+		t.Fatalf("env persisted unexpectedly: %#v", second)
+	}
+	_, err := registry.Handle(map[string]any{
+		"session_id": "s1",
+		"command":    "true",
+		"env":        map[string]any{"BAD KEY": "value"},
+	}, config)
+	if err == nil || !strings.Contains(err.Error(), "invalid bash_session env key") {
+		t.Fatalf("expected invalid env key error, got %v", err)
 	}
 }
 

@@ -53,11 +53,15 @@ func BuiltinDescriptors() []ToolSpec {
 		{
 			Name:        "read_file",
 			Handler:     "harnas.builtin.read_file",
-			Description: "Read the contents of a file at the given path. Returns the file body as text.",
+			Description: "Read a text file with cat -n style line numbers. Supports optional offset and limit.",
 			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"path": map[string]any{"type": "string"}},
-				"required":   []any{"path"},
+				"type": "object",
+				"properties": map[string]any{
+					"path":   map[string]any{"type": "string"},
+					"offset": map[string]any{"type": "integer", "description": "Start at line N (0-indexed). Default 0."},
+					"limit":  map[string]any{"type": "integer", "description": "Read at most N lines. Default 2000."},
+				},
+				"required": []any{"path"},
 			},
 		},
 		{
@@ -170,6 +174,7 @@ func BuiltinDescriptors() []ToolSpec {
 					"command":    map[string]any{"type": "string"},
 					"action":     map[string]any{"type": "string", "enum": []any{"run", "status", "kill"}},
 					"timeout_ms": map[string]any{"type": "integer", "minimum": float64(1)},
+					"env":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
 				},
 			},
 		},
@@ -182,7 +187,55 @@ func BuiltinReadFile(args map[string]any) (string, error) {
 		return "", err
 	}
 	data, err := os.ReadFile(path)
-	return string(data), err
+	if err != nil {
+		return "", err
+	}
+	checkLen := len(data)
+	if checkLen > 8*1024 {
+		checkLen = 8 * 1024
+	}
+	if bytes.Contains(data[:checkLen], []byte{0}) {
+		return "", fmt.Errorf("Cannot read binary file %q. Use bash_session to inspect binary files.", path)
+	}
+	offset := intValue(args["offset"])
+	if offset < 0 {
+		offset = 0
+	}
+	limit := intValue(args["limit"])
+	if limit <= 0 {
+		limit = 2000
+	}
+	if limit > 10000 {
+		limit = 10000
+	}
+	return formatNumberedFile(path, data, offset, limit), nil
+}
+
+func formatNumberedFile(_ string, data []byte, offset, limit int) string {
+	if len(data) == 0 {
+		return "... [file has 0 total lines; showing 0–0]\n"
+	}
+	text := string(data)
+	lines := strings.Split(text, "\n")
+	if strings.HasSuffix(text, "\n") {
+		lines = lines[:len(lines)-1]
+	}
+	total := len(lines)
+	if offset >= total {
+		return fmt.Sprintf("... [file has %d total lines; offset %d is past EOF]\n", total, offset)
+	}
+	end := offset + limit
+	if end > total {
+		end = total
+	}
+	var out strings.Builder
+	for index := offset; index < end; index++ {
+		fmt.Fprintf(&out, "%6d\t%s\n", index+1, lines[index])
+	}
+	if total > offset+limit {
+		fmt.Fprintf(&out, "... [file has %d total lines; showing %d–%d]\n", total, offset, offset+limit)
+	}
+	return out.String()
 }
 
 func BuiltinWriteFile(args map[string]any) (string, error) {

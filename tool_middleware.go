@@ -101,10 +101,7 @@ func (g StaleReadGuard) WrapRead(handler ToolHandler) ToolHandler {
 		}
 		path := stringValue(args["path"])
 		if path != "" && g.Log != nil {
-			g.Log.Append(EventAnnotation, map[string]any{
-				"kind": "stale_read_guard.hash",
-				"data": map[string]any{"path": path, "sha256": sha256Hex(output)},
-			})
+			g.recordFileHash(path)
 		}
 		return output, nil
 	}
@@ -126,8 +123,26 @@ func (g StaleReadGuard) wrapMutating(handler ToolHandler, action string) ToolHan
 				return "", err
 			}
 		}
-		return handler(args)
+		output, err := handler(args)
+		if err != nil {
+			return "", err
+		}
+		if path != "" && g.Log != nil {
+			g.recordFileHash(path)
+		}
+		return output, nil
 	}
+}
+
+func (g StaleReadGuard) recordFileHash(path string) {
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	g.Log.Append(EventAnnotation, map[string]any{
+		"kind": "stale_read_guard.hash",
+		"data": map[string]any{"path": path, "sha256": sha256Hex(string(content))},
+	})
 }
 
 func (g StaleReadGuard) check(path string, action string) error {

@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -49,7 +50,11 @@ func (r *BashSessionRegistry) Handle(args map[string]any, config map[string]any)
 			return "", err
 		}
 		timeout := durationMillis(args["timeout_ms"])
-		return marshalBashSessionResult(session.run(command, timeout))
+		commandEnv, err := parseCommandEnv(args["env"])
+		if err != nil {
+			return "", err
+		}
+		return marshalBashSessionResult(session.run(command, commandEnv, timeout))
 	case "status":
 		session, err := r.session(sessionID, config, false)
 		if err != nil {
@@ -103,6 +108,7 @@ func (r *BashSessionRegistry) session(id string, config map[string]any, create b
 
 type bashSession struct {
 	id     string
+	shell  string
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout *ringBuffer
@@ -174,6 +180,7 @@ func startBashSession(id string, config map[string]any) (*bashSession, error) {
 
 	session := &bashSession{
 		id:     id,
+		shell:  shell,
 		cmd:    cmd,
 		stdin:  stdin,
 		stdout: newRingBuffer(maxBytes),
@@ -188,7 +195,7 @@ func startBashSession(id string, config map[string]any) (*bashSession, error) {
 	return session, nil
 }
 
-func (s *bashSession) run(command string, timeout time.Duration) bashSessionResult {
+func (s *bashSession) run(command string, commandEnv map[string]string, timeout time.Duration) bashSessionResult {
 	s.mu.Lock()
 	for s.current != nil {
 		current := s.current
@@ -208,7 +215,11 @@ func (s *bashSession) run(command string, timeout time.Duration) bashSessionResu
 		stderrStart: s.stderr.Offset(),
 	}
 	s.current = run
-	framed := fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '__HARNAS_ERR_DONE_%s\\n' >&2; printf '__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", command, run.token, run.token)
+	executable := command
+	if len(commandEnv) > 0 {
+		executable = wrapCommandEnv(s.shell, command, commandEnv)
+	}
+	framed := fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '__HARNAS_ERR_DONE_%s\\n' >&2; printf '__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", executable, run.token, run.token)
 	if _, err := io.WriteString(s.stdin, framed); err != nil {
 		s.current = nil
 		close(run.done)
@@ -227,6 +238,48 @@ func (s *bashSession) run(command string, timeout time.Duration) bashSessionResu
 	}
 	<-run.done
 	return s.snapshot("completed", run.exitCode, run)
+}
+
+var envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func parseCommandEnv(value any) (map[string]string, error) {
+	if value == nil {
+		return nil, nil
+	}
+	raw, ok := value.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("bash_session env must be an object")
+	}
+	out := map[string]string{}
+	for key, item := range raw {
+		if !envNamePattern.MatchString(key) {
+			return nil, fmt.Errorf("invalid bash_session env key: %s", key)
+		}
+		text, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("bash_session env value for %s must be a string", key)
+		}
+		out[key] = text
+	}
+	return out, nil
+}
+
+func wrapCommandEnv(shell, command string, env map[string]string) string {
+	keys := make([]string, 0, len(env))
+	for key := range env {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := []string{"env"}
+	for _, key := range keys {
+		parts = append(parts, key+"="+shellQuote(env[key]))
+	}
+	parts = append(parts, shellQuote(shell), "-c", shellQuote(command))
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
 }
 
 func (s *bashSession) status() bashSessionResult {

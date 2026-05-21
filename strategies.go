@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -174,6 +175,11 @@ type DenyByName struct {
 }
 
 type WriteSandbox struct {
+	Allow []string
+	Deny  []string
+}
+
+type NetworkSandbox struct {
 	Allow []string
 	Deny  []string
 }
@@ -503,12 +509,73 @@ func sandboxWriteMessage(path string, allow, deny []string) string {
 		path, quotedList(allow), quotedList(deny))
 }
 
+func (n NetworkSandbox) Install(session *Session) {
+	allow := n.Allow
+	deny := n.Deny
+	consecutiveViolations := 0
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		name, _ := toolUse.Payload["name"].(string)
+		if name != "fetch_url" {
+			return map[string]any{"allow": true}
+		}
+		args := asMap(toolUse.Payload["arguments"])
+		rawURL := stringValue(args["url"])
+		host, ok := networkSandboxHost(rawURL)
+		if !ok {
+			return map[string]any{"allow": true}
+		}
+		if stringInSlice(host, allow) && !stringInSlice(host, deny) {
+			consecutiveViolations = 0
+			return map[string]any{"allow": true}
+		}
+		consecutiveViolations++
+		if consecutiveViolations >= 3 {
+			session.Log.Append(EventRuntimeError, map[string]any{
+				"source":      "strategy",
+				"handler":     "sandbox/network",
+				"error_class": "Harnas::SandboxViolation",
+				"message":     "sandbox_network_violation_limit",
+				"reason":      "sandbox_network_violation_limit",
+				"terminal":    true,
+			})
+			panic(TurnFailed{Message: "sandbox_network_violation_limit"})
+		}
+		return map[string]any{
+			"allow":  false,
+			"reason": sandboxNetworkMessage(host, allow),
+		}
+	})
+}
+
+func networkSandboxHost(rawURL string) (string, bool) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil || parsed.Host == "" {
+		return "", false
+	}
+	return parsed.Hostname(), true
+}
+
+func sandboxNetworkMessage(host string, allow []string) string {
+	return fmt.Sprintf("Network call to '%s' is not permitted. Allowed hosts: %s.",
+		host, quotedList(allow))
+}
+
 func quotedList(values []string) string {
 	parts := make([]string, 0, len(values))
 	for _, value := range values {
 		parts = append(parts, "'"+value+"'")
 	}
 	return "[" + strings.Join(parts, ", ") + "]"
+}
+
+func stringInSlice(value string, values []string) bool {
+	for _, item := range values {
+		if item == value {
+			return true
+		}
+	}
+	return false
 }
 
 func (d DenyByName) Install(session *Session) {

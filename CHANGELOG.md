@@ -2,6 +2,22 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.14.0] — 2026-05-21
+
+### Added
+
+- Added `sandbox/network`, a tool-boundary network strategy with exact host
+  allow/deny enforcement for `fetch_url`.
+- Extended `harnas.builtin.bash_session` so `run` accepts an optional
+  per-command `env` object whose variables do not persist in the shell
+  session.
+
+### Changed
+
+- Updated `harnas.builtin.read_file` to accept `offset` and `limit`, return
+  `cat -n` style line-numbered output, and reject binary files.
+- Conformance now passes 45/45 fixtures.
+
 ## [0.13.0] — 2026-05-18
 
 ### Added
@@ -261,6 +277,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.14.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.12.0
 [0.11.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.11.0

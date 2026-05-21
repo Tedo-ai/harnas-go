@@ -491,6 +491,11 @@ func BuildStrategiesWithRuntime(
 				Allow: stringSlice(spec.Config["allow"]),
 				Deny:  stringSlice(spec.Config["deny"]),
 			}})
+		case "sandbox/network":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: NetworkSandbox{
+				Allow: stringSlice(spec.Config["allow"]),
+				Deny:  stringSlice(spec.Config["deny"]),
+			}})
 		case "guard/repetition":
 			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: RepetitionGuard{
 				MaxConsecutiveFailures:   intValue(spec.Config["max_consecutive_failures"]),
@@ -730,7 +735,7 @@ func knownStrategy(name string) bool {
 	case "Compaction::MarkerTail", "Compaction::SummaryTail",
 		"Compaction::TokenMarkerTail", "Compaction::ToolOutputCap",
 		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval",
-		"sandbox/write", "guard/repetition", "guard/timeout", "guard/health", "guard/cost_budget":
+		"sandbox/write", "sandbox/network", "guard/repetition", "guard/timeout", "guard/health", "guard/cost_budget":
 		return true
 	default:
 		return false
