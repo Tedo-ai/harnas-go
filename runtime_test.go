@@ -35,6 +35,36 @@ func TestRuntimeBuildsAgentWithMetadata(t *testing.T) {
 	}
 }
 
+func TestRuntimeBuildsFromInMemoryManifest(t *testing.T) {
+	runtime, err := NewRuntime(RuntimeConfig{
+		Manifest: map[string]any{
+			"harnas_version": "0.1",
+			"name":           "runtime-map-test",
+			"provider":       map[string]any{"kind": "mock", "max_tokens": 128},
+			"tools":          []any{},
+			"strategies":     []any{},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Session().Metadata["manifest_name"] != "runtime-map-test" {
+		t.Fatalf("runtime did not build from in-memory manifest: %#v", runtime.Session().Metadata)
+	}
+}
+
+func TestRuntimeRequiresExactlyOneManifestSource(t *testing.T) {
+	if _, err := NewRuntime(RuntimeConfig{}); err == nil || err.Error() != "RuntimeConfig requires either Manifest or ManifestPath" {
+		t.Fatalf("expected missing manifest source error, got %v", err)
+	}
+	if _, err := NewRuntime(RuntimeConfig{
+		Manifest:     map[string]any{},
+		ManifestPath: "manifest.json",
+	}); err == nil || err.Error() != "RuntimeConfig accepts Manifest OR ManifestPath, not both" {
+		t.Fatalf("expected conflicting manifest source error, got %v", err)
+	}
+}
+
 func TestRuntimeResumesSavedSession(t *testing.T) {
 	dir := t.TempDir()
 	manifest := filepath.Join(dir, "manifest.json")

@@ -1,6 +1,7 @@
 package harnas
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,6 +14,7 @@ type Runtime struct {
 }
 
 type RuntimeConfig struct {
+	Manifest     map[string]any
 	ManifestPath string
 	Options      ManifestOptions
 	SessionPath  string
@@ -21,10 +23,26 @@ type RuntimeConfig struct {
 }
 
 func NewRuntime(config RuntimeConfig) (*Runtime, error) {
+	if config.Manifest == nil && config.ManifestPath == "" {
+		return nil, fmt.Errorf("RuntimeConfig requires either Manifest or ManifestPath")
+	}
+	if config.Manifest != nil && config.ManifestPath != "" {
+		return nil, fmt.Errorf("RuntimeConfig accepts Manifest OR ManifestPath, not both")
+	}
 	if config.Options.AttachmentStore == nil {
 		config.Options.AttachmentStore = NewFilesystemStore(DefaultAttachmentRoot(config.SessionPath))
 	}
-	loaded, err := LoadManifest(config.ManifestPath, config.Options)
+	var loaded *LoadedManifest
+	var err error
+	if config.Manifest != nil {
+		manifest, decodeErr := ManifestFromMap(config.Manifest)
+		if decodeErr != nil {
+			return nil, decodeErr
+		}
+		loaded, err = BuildManifest(manifest, config.Options)
+	} else {
+		loaded, err = LoadManifest(config.ManifestPath, config.Options)
+	}
 	if err != nil {
 		return nil, err
 	}

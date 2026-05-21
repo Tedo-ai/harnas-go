@@ -137,6 +137,23 @@ func ReadManifest(path string) (Manifest, error) {
 	return manifest, ValidateManifest(manifest)
 }
 
+func ManifestFromMap(source map[string]any) (Manifest, error) {
+	var manifest Manifest
+	data, err := json.Marshal(source)
+	if err != nil {
+		return manifest, err
+	}
+	if err := validateManifestKeys(data); err != nil {
+		return manifest, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		return manifest, validationError("%s", err.Error())
+	}
+	return manifest, ValidateManifest(manifest)
+}
+
 func validateManifestKeys(data []byte) error {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {

@@ -54,6 +54,7 @@ func Run(fixtureDir string) (Result, error) {
 
 	expectedDeltasPath := filepath.Join(fixtureDir, "expected-deltas.jsonl")
 	expectedStrategyEventsPath := filepath.Join(fixtureDir, "expected-strategy-events.jsonl")
+	expectedSpawnChildrenPath := filepath.Join(fixtureDir, "expected-spawn-children.json")
 	cwd, err := os.Getwd()
 	if err != nil {
 		return Result{}, err
@@ -69,12 +70,16 @@ func Run(fixtureDir string) (Result, error) {
 		nil,
 		expectedDeltasPath,
 		expectedStrategyEventsPath,
+		expectedSpawnChildrenPath,
 	)
 	if err != nil {
 		return Result{}, err
 	}
 
 	actual := session.Log.Events()
+	if fixture == "with-spawn-agent-reciprocity" {
+		actual = normalizeSpawnReciprocityActual(actual)
+	}
 	if filepath.Base(fixtureDir) == "with-credential-proxy-injection" {
 		encoded, _ := json.Marshal(actual)
 		if strings.Contains(string(encoded), "SECRET-DO-NOT-LOG") {
@@ -263,7 +268,7 @@ func RunSessionWithDeltaPath(manifest harnas.Manifest, scriptPath string, inputs
 	return session, deltas, err
 }
 
-func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session, expectedDeltasPath string, expectedStrategyEventsPath string) (*harnas.Session, []DeltaRow, []StrategyEventRow, error) {
+func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs []any, session *harnas.Session, expectedDeltasPath string, expectedStrategyEventsPath string, expectedSpawnChildrenPath ...string) (*harnas.Session, []DeltaRow, []StrategyEventRow, error) {
 	streaming := filepath.Base(scriptPath) == "provider-script-stream.json" || filepath.Base(scriptPath) == "phase-1-provider-script-stream.json" || filepath.Base(scriptPath) == "phase-2-provider-script-stream.json"
 
 	if session == nil {
@@ -402,9 +407,13 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 				if err := session.Save(path); err != nil {
 					return nil, nil, nil, err
 				}
+				idsBefore := eventIDs(session.Log.Events())
 				reloaded, err := harnas.LoadSession(path)
 				if err != nil {
 					return nil, nil, nil, err
+				}
+				if !reflect.DeepEqual(idsBefore, eventIDs(reloaded.Log.Events())) {
+					return nil, nil, nil, fmt.Errorf("event id preservation mismatch: before=%v after=%v", idsBefore, eventIDs(reloaded.Log.Events()))
 				}
 				if !reflect.DeepEqual(reloaded.Metadata["manifest"], manifestSnapshot(manifest)) {
 					return nil, nil, nil, fmt.Errorf("manifest snapshot mismatch")
@@ -439,7 +448,91 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 			return nil, nil, nil, err
 		}
 	}
+	if len(expectedSpawnChildrenPath) > 0 && expectedSpawnChildrenPath[0] != "" && fileExists(expectedSpawnChildrenPath[0]) {
+		if err := verifySpawnChildren(session, loop.Runner, expectedSpawnChildrenPath[0]); err != nil {
+			return nil, nil, nil, err
+		}
+	}
 	return session, deltas, strategyEvents, nil
+}
+
+func eventIDs(events []harnas.Event) []string {
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, event.ID)
+	}
+	return ids
+}
+
+func normalizeSpawnReciprocityActual(events []harnas.Event) []harnas.Event {
+	out := make([]harnas.Event, len(events))
+	copy(out, events)
+	for i, event := range out {
+		if event.Type != harnas.EventAgentSpawn {
+			continue
+		}
+		payload := map[string]any{}
+		for key, value := range event.Payload {
+			payload[key] = value
+		}
+		payload["spawn_id"] = "<generated>"
+		payload["child_session_id"] = "<generated>"
+		payload["spawned_by_event_id"] = "<generated>"
+		out[i].Payload = payload
+	}
+	for i, event := range out {
+		if event.Type != harnas.EventToolResult {
+			continue
+		}
+		payload := map[string]any{}
+		for key, value := range event.Payload {
+			payload[key] = value
+		}
+		payload["output"] = "<generated>"
+		out[i].Payload = payload
+	}
+	return out
+}
+
+func verifySpawnChildren(parent *harnas.Session, runner *harnas.Runner, path string) error {
+	if runner == nil {
+		return fmt.Errorf("spawn child fixture requires a Runner")
+	}
+	var spec struct {
+		Task                 string `json:"task"`
+		ChildInitialUserText string `json:"child_initial_user_text"`
+	}
+	if err := readJSON(path, &spec); err != nil {
+		return err
+	}
+	var spawn *harnas.Event
+	for _, event := range parent.Log.Events() {
+		if event.Type == harnas.EventAgentSpawn && stringValue(event.Payload["task"]) == spec.Task {
+			copied := event
+			spawn = &copied
+			break
+		}
+	}
+	if spawn == nil {
+		return fmt.Errorf("missing agent_spawn for task %q", spec.Task)
+	}
+	spawnID := stringValue(spawn.Payload["spawn_id"])
+	childID := stringValue(spawn.Payload["child_session_id"])
+	child := runner.ChildSessions[childID]
+	if child == nil {
+		return fmt.Errorf("missing child Session %q", childID)
+	}
+	if child.ParentSessionID != parent.ID || child.SpawnID != spawnID || child.SpawnedByEventID != stringValue(spawn.Payload["spawned_by_event_id"]) {
+		return fmt.Errorf("child reciprocity mismatch: child=%#v spawn=%#v parent=%s", child, spawn.Payload, parent.ID)
+	}
+	if child.RootSessionID == "" || len(child.DelegationChain) == 0 {
+		return fmt.Errorf("child delegation metadata missing: child=%#v", child)
+	}
+	events := child.Log.Events()
+	if len(events) == 0 || events[0].Type != harnas.EventUserMessage || stringValue(events[0].Payload["text"]) != spec.ChildInitialUserText {
+		return fmt.Errorf("child initial user_message mismatch: %#v", events)
+	}
+	return nil
 }
 
 func userPayload(input any) map[string]any {
@@ -585,9 +678,52 @@ func eventSlicesEqual(left, right []harnas.Event) bool {
 }
 
 func eventsEqual(left, right harnas.Event) bool {
+	if wildcardEvent(right) {
+		leftAny := map[string]any{"seq": left.Seq, "type": string(left.Type), "payload": left.Payload}
+		rightAny := map[string]any{"seq": right.Seq, "type": string(right.Type), "payload": right.Payload}
+		return wildcardValueEqual(leftAny, rightAny)
+	}
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+}
+
+func wildcardEvent(event harnas.Event) bool {
+	encoded, err := json.Marshal(event)
+	return err == nil && strings.Contains(string(encoded), "<generated>")
+}
+
+func wildcardValueEqual(actual, expected any) bool {
+	if expected == "<generated>" {
+		return actual != nil && actual != ""
+	}
+	actualMap, actualMapOK := actual.(map[string]any)
+	expectedMap, expectedMapOK := expected.(map[string]any)
+	if actualMapOK && expectedMapOK {
+		if len(actualMap) != len(expectedMap) {
+			return false
+		}
+		for key, expectedValue := range expectedMap {
+			if !wildcardValueEqual(actualMap[key], expectedValue) {
+				return false
+			}
+		}
+		return true
+	}
+	actualSlice, actualSliceOK := actual.([]any)
+	expectedSlice, expectedSliceOK := expected.([]any)
+	if actualSliceOK && expectedSliceOK {
+		if len(actualSlice) != len(expectedSlice) {
+			return false
+		}
+		for i := range actualSlice {
+			if !wildcardValueEqual(actualSlice[i], expectedSlice[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return reflect.DeepEqual(actual, expected)
 }
 
 func readJSON(path string, target any) error {

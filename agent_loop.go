@@ -293,6 +293,7 @@ func (l AgentLoop) dispatchPendingTools() []Event {
 				},
 			})
 		} else {
+			l.Runner.ParentSession = l.Session
 			l.Runner.Run(toolUseWithArgumentOverrides(toolUse, decisions), l.Session.Log)
 		}
 		l.Session.Hooks.Invoke("post_tool_use", map[string]any{

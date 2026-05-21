@@ -2,6 +2,25 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.18.1] — 2026-05-22
+
+### Added
+
+- Added `RuntimeConfig.Manifest` for in-memory manifests. `NewRuntime`
+  now requires exactly one of `Manifest` or `ManifestPath`.
+- Added event-id preservation checking to Session save/load conformance.
+- Added spawn-agent reciprocity conformance: `spawn_agent` now creates a
+  child Session with reciprocal delegation metadata and an initial task
+  `user_message`.
+
+### Changed
+
+- Lockstep patch release driven by foss/harnas spec audit findings.
+- Validated against fixtures version `0.18.1`: 61/61.
+- Audited capability manifest hashing against Ruby and Python; the
+  v0.18.1 sample manifest hashes identically across all three
+  implementations.
+
 ## [0.18.0] — 2026-05-21
 
 ### Added
@@ -361,6 +380,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.18.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.1
 [0.18.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.0
 [0.17.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.17.0
 [0.16.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.16.0

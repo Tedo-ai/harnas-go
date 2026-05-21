@@ -54,7 +54,9 @@ func (r *Registry) Tools() []Tool {
 }
 
 type Runner struct {
-	Registry *Registry
+	Registry      *Registry
+	ParentSession *Session
+	ChildSessions map[string]*Session
 }
 
 func (r *Runner) Run(toolUse Event, log *Log) {
@@ -166,6 +168,32 @@ func (r *Runner) runSpawnAgent(toolUse Event, log *Log, args map[string]any) {
 	if value, ok := args["join_policy"].(string); ok && value != "" {
 		joinPolicy = value
 	}
+	if r.ChildSessions == nil {
+		r.ChildSessions = map[string]*Session{}
+	}
+	parentSessionID := ""
+	rootSessionID := ""
+	delegationChain := []map[string]any{}
+	if r.ParentSession != nil {
+		parentSessionID = r.ParentSession.ID
+		rootSessionID = r.ParentSession.RootSessionID
+		if rootSessionID == "" {
+			rootSessionID = r.ParentSession.ID
+		}
+		delegationChain = append(cloneDelegationChain(r.ParentSession.DelegationChain), map[string]any{
+			"session_id": r.ParentSession.ID,
+			"spawn_id":   r.ParentSession.SpawnID,
+		})
+	}
+	child := NewSession(childSessionID, NewLog(), metadata)
+	child.ParentSessionID = parentSessionID
+	child.RootSessionID = rootSessionID
+	child.SpawnID = spawnID
+	child.SpawnedByEventID = toolUse.ID
+	child.DelegationChain = delegationChain
+	child.Log.Append(EventUserMessage, map[string]any{"text": task})
+	r.ChildSessions[childSessionID] = child
+
 	log.Append(EventAgentSpawn, map[string]any{
 		"spawn_id":            spawnID,
 		"child_session_id":    childSessionID,
