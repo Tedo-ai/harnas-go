@@ -26,13 +26,14 @@ type UnknownStrategyError struct{ ManifestError }
 type UnresolvedHandlerError struct{ ManifestError }
 
 type Manifest struct {
-	Version    string         `json:"harnas_version"`
-	Name       string         `json:"name"`
-	System     string         `json:"system,omitempty"`
-	Provider   ProviderSpec   `json:"provider"`
-	Tools      []ToolSpec     `json:"tools"`
-	Strategies []StrategySpec `json:"strategies"`
-	Hooks      []HookSpec     `json:"hooks,omitempty"`
+	Version             string         `json:"harnas_version"`
+	FixtureVersionAdded string         `json:"fixture_version_added,omitempty"`
+	Name                string         `json:"name"`
+	System              string         `json:"system,omitempty"`
+	Provider            ProviderSpec   `json:"provider"`
+	Tools               []ToolSpec     `json:"tools"`
+	Strategies          []StrategySpec `json:"strategies"`
+	Hooks               []HookSpec     `json:"hooks,omitempty"`
 }
 
 type ProviderSpec struct {

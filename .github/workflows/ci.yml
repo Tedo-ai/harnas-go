@@ -22,3 +22,20 @@ jobs:
       - run: test -z "$(gofmt -l .)"
       - run: go test ./...
       - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" bin/conformance
+
+  packed-conformance:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+      - name: Checkout spec
+        uses: actions/checkout@v5
+        with:
+          repository: Tedo-ai/harnas
+          path: harnas-spec
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+      - run: go build -o /tmp/harnas-test ./cmd/harnas
+      - run: /tmp/harnas-test conformance --fixtures-from "$GITHUB_WORKSPACE/harnas-spec"

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	harnas "github.com/Tedo-ai/harnas-go"
+	"github.com/Tedo-ai/harnas-go/conformance"
 )
 
 const (
@@ -37,6 +38,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	switch args[0] {
 	case "chat":
 		err = runChat(args[1:], os.Stdin, stdout, stderr)
+	case "conformance":
+		status, err = runConformance(args[1:], stdout, stderr)
 	case "diff":
 		status, err = runDiff(args[1:], stdout)
 	case "fork":
@@ -61,12 +64,84 @@ func run(args []string, stdout, stderr io.Writer) int {
 func usage(w io.Writer) {
 	fmt.Fprint(w, `usage:
   harnas chat <manifest> [--provider KIND] [--model MODEL]
+  harnas conformance [--fixtures-from PATH] [--fixture NAME]
   harnas diff <a.jsonl> <b.jsonl>
   harnas fork <session.jsonl> --at-seq N --out <new.jsonl>
   harnas inspect <session.jsonl> [--json]
   harnas project <session.jsonl> --manifest PATH [--from-seq N] [--to-seq M]
   harnas run <manifest> --input TEXT [--provider KIND] [--model MODEL]
 `)
+}
+
+func runConformance(args []string, stdout, stderr io.Writer) (int, error) {
+	fs := flag.NewFlagSet("conformance", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	fixture := fs.String("fixture", "", "fixture name to run")
+	fixturesFrom := fs.String("fixtures-from", "", "spec checkout containing conformance fixtures")
+	if err := fs.Parse(permuteFlags(args, map[string]bool{"fixture": true, "fixtures-from": true})); err != nil {
+		return exitUsage, err
+	}
+	spec := conformanceSpecRoot(*fixturesFrom)
+	root := filepath.Join(spec, "conformance", "agents")
+	fixtures, err := conformanceFixtureDirs(root, *fixture)
+	if err != nil {
+		return exitUsage, err
+	}
+	failed := 0
+	for _, fixtureDir := range fixtures {
+		result, err := conformance.Run(fixtureDir)
+		if err != nil {
+			return exitUsage, err
+		}
+		if result.Passed {
+			fmt.Fprintf(stdout, "  ✓  %s  ok (%d events)\n", result.Fixture, len(result.Actual))
+		} else {
+			fmt.Fprintf(stdout, "  ✗  %s  FAIL\n     %s\n", result.Fixture, result.Diff)
+			failed++
+		}
+	}
+	version := conformance.FixtureVersion(spec)
+	suffix := ""
+	if version != "" {
+		suffix = fmt.Sprintf(" against fixtures v%s", version)
+	}
+	fmt.Fprintf(stdout, "\n%d fixtures · %d passed · %d failed%s\n", len(fixtures), len(fixtures)-failed, failed, suffix)
+	if failed > 0 {
+		return exitAgent, nil
+	}
+	return exitSuccess, nil
+}
+
+func conformanceSpecRoot(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
+	if root := os.Getenv("HARNAS_SPEC"); root != "" {
+		return root
+	}
+	for _, candidate := range []string{filepath.Join("..", "harnas"), filepath.Join("..", "..", "harnas")} {
+		if stat, err := os.Stat(filepath.Join(candidate, "conformance", "agents")); err == nil && stat.IsDir() {
+			return candidate
+		}
+	}
+	return filepath.Join("..", "harnas")
+}
+
+func conformanceFixtureDirs(root, only string) ([]string, error) {
+	if only != "" {
+		return []string{filepath.Join(root, only)}, nil
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, err
+	}
+	dirs := []string{}
+	for _, entry := range entries {
+		if entry.IsDir() {
+			dirs = append(dirs, filepath.Join(root, entry.Name()))
+		}
+	}
+	return dirs, nil
 }
 
 func runChat(args []string, stdin io.Reader, stdout, stderr io.Writer) error {

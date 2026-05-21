@@ -96,6 +96,20 @@ func Run(fixtureDir string) (Result, error) {
 	}, nil
 }
 
+func FixtureVersion(specRoot string) string {
+	content, err := os.ReadFile(filepath.Join(specRoot, "VERSION"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(content), "\n") {
+		key, value, ok := strings.Cut(line, ":")
+		if ok && strings.TrimSpace(key) == "fixtures_version" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
 func LoadManifest(fixtureDir string) (harnas.Manifest, error) {
 	return harnas.ReadManifest(filepath.Join(fixtureDir, "manifest.json"))
 }

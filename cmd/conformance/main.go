@@ -11,9 +11,10 @@ import (
 
 func main() {
 	fixture := flag.String("fixture", "", "fixture name to run")
+	fixturesFrom := flag.String("fixtures-from", "", "spec checkout containing conformance fixtures")
 	flag.Parse()
 
-	root := filepath.Join(specRoot(), "conformance", "agents")
+	root := filepath.Join(specRoot(*fixturesFrom), "conformance", "agents")
 	fixtures, err := fixtureDirs(root, *fixture)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -35,13 +36,21 @@ func main() {
 		}
 		fmt.Printf("  ✓  %s  ok (%d events)\n", result.Fixture, len(result.Actual))
 	}
-	fmt.Printf("\n%d fixtures · %d passed · %d failed\n", len(fixtures), len(fixtures)-failed, failed)
+	version := conformance.FixtureVersion(specRoot(*fixturesFrom))
+	suffix := ""
+	if version != "" {
+		suffix = fmt.Sprintf(" against fixtures v%s", version)
+	}
+	fmt.Printf("\n%d fixtures · %d passed · %d failed%s\n", len(fixtures), len(fixtures)-failed, failed, suffix)
 	if failed > 0 {
 		os.Exit(1)
 	}
 }
 
-func specRoot() string {
+func specRoot(explicit string) string {
+	if explicit != "" {
+		return explicit
+	}
 	if root := os.Getenv("HARNAS_SPEC"); root != "" {
 		return root
 	}

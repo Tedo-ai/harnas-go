@@ -2,6 +2,21 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.14.1] — 2026-05-21
+
+### Added
+
+- Conformance runner now supports `--fixtures-from` and reports the
+  fixtures version from the spec repo `VERSION` file.
+- Added `harnas conformance` so packed binaries can run conformance
+  without the source-tree `bin/conformance` wrapper.
+- Added packed-binary conformance CI: build `cmd/harnas`, then run
+  conformance through the built binary.
+
+### Changed
+
+- Validated against fixtures version `0.14.1`.
+
 ## [0.14.0] — 2026-05-21
 
 ### Added
@@ -277,6 +292,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.14.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.1
 [0.14.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.12.0
