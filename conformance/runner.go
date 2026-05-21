@@ -26,6 +26,9 @@ func Run(fixtureDir string) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	if fileExists(filepath.Join(fixtureDir, "expected-projections.jsonl")) {
+		return RunProjectionFixture(fixtureDir)
+	}
 	fixture := filepath.Base(fixtureDir)
 	manifest, err := LoadManifest(fixtureDir)
 	if err != nil {
@@ -100,6 +103,120 @@ func Run(fixtureDir string) (Result, error) {
 		Expected: expected,
 		Diff:     diff,
 	}, nil
+}
+
+type ProjectionRow struct {
+	Projection string `json:"projection"`
+	Input      string `json:"input"`
+	Output     any    `json:"output"`
+}
+
+func RunProjectionFixture(fixtureDir string) (Result, error) {
+	fixture := filepath.Base(fixtureDir)
+	sessions, root, err := LoadFixtureSessions(filepath.Join(fixtureDir, "sessions"))
+	if err != nil {
+		return Result{}, err
+	}
+	expected, err := ReadExpected(filepath.Join(fixtureDir, "expected-log.jsonl"))
+	if err != nil {
+		return Result{}, err
+	}
+	actual := root.Log.Events()
+	diff := FirstDiff(actual, expected)
+	if diff == "" {
+		rows, err := ReadProjectionExpected(filepath.Join(fixtureDir, "expected-projections.jsonl"))
+		if err != nil {
+			return Result{}, err
+		}
+		diff = FirstProjectionDiff(rows, harnas.SessionMap(sessions))
+	}
+	return Result{
+		Fixture:  fixture,
+		Passed:   diff == "",
+		Actual:   actual,
+		Expected: expected,
+		Diff:     diff,
+	}, nil
+}
+
+func LoadFixtureSessions(dir string) (map[string]*harnas.Session, *harnas.Session, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, nil, err
+	}
+	sessions := map[string]*harnas.Session{}
+	var root *harnas.Session
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".jsonl") {
+			continue
+		}
+		session, err := harnas.LoadSession(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			return nil, nil, err
+		}
+		sessions[session.ID] = session
+		if session.ParentSessionID == "" {
+			if root != nil {
+				return nil, nil, fmt.Errorf("multiple root sessions in %s", dir)
+			}
+			root = session
+		}
+	}
+	if root == nil {
+		return nil, nil, fmt.Errorf("no root session in %s", dir)
+	}
+	return sessions, root, nil
+}
+
+func ReadProjectionExpected(path string) ([]ProjectionRow, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	lines := splitJSONLines(data)
+	rows := make([]ProjectionRow, 0, len(lines))
+	for _, line := range lines {
+		var row ProjectionRow
+		if err := json.Unmarshal(line, &row); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		rows = append(rows, row)
+	}
+	return rows, nil
+}
+
+func FirstProjectionDiff(rows []ProjectionRow, resolver harnas.SessionResolver) string {
+	for i, row := range rows {
+		actual, err := evaluateProjection(row.Projection, row.Input, resolver)
+		if err != nil {
+			return fmt.Sprintf("projection %d %s error=%v", i, row.Projection, err)
+		}
+		if !jsonEqual(actual, row.Output) {
+			return fmt.Sprintf("projection %d %s actual=%#v expected=%#v", i, row.Projection, actual, row.Output)
+		}
+	}
+	return ""
+}
+
+func evaluateProjection(name, input string, resolver harnas.SessionResolver) (any, error) {
+	switch name {
+	case "delegation_tree":
+		return harnas.DelegationTree(input, resolver)
+	case "open_children":
+		return harnas.OpenChildren(input, resolver)
+	case "descendant_timeline":
+		return harnas.DescendantTimeline(input, resolver)
+	case "descendant_usage":
+		return harnas.DescendantUsage(input, resolver)
+	default:
+		return nil, fmt.Errorf("unknown projection %q", name)
+	}
+}
+
+func jsonEqual(left, right any) bool {
+	leftJSON, leftErr := json.Marshal(left)
+	rightJSON, rightErr := json.Marshal(right)
+	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
 }
 
 func FixtureVersion(specRoot string) string {
