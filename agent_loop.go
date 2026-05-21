@@ -72,6 +72,10 @@ func (l AgentLoop) runTurn() (string, error) {
 	}
 	request, err := l.Projection.Project(l.Session.Log)
 	if err != nil {
+		if mismatch, ok := err.(CapabilityMismatchError); ok {
+			l.appendRuntimeError("capability_mismatch", mismatch.Error())
+			return "runtime_failed", nil
+		}
 		return "", err
 	}
 	l.Session.Hooks.Invoke("post_projection", map[string]any{"session": l.Session, "request": request})
@@ -229,6 +233,17 @@ func (l AgentLoop) appendProviderError(err error, attempt int, terminal bool) {
 		"message":     err.Error(),
 		"attempt":     float64(attempt),
 		"terminal":    terminal,
+	})
+}
+
+func (l AgentLoop) appendRuntimeError(reason, message string) {
+	l.Session.Log.Append(EventRuntimeError, map[string]any{
+		"source":      "projection",
+		"handler":     projectionName(l.Projection),
+		"error_class": "CapabilityMismatchError",
+		"message":     message,
+		"reason":      reason,
+		"terminal":    true,
 	})
 }
 

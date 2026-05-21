@@ -37,10 +37,12 @@ type Manifest struct {
 }
 
 type ProviderSpec struct {
-	Kind      string `json:"kind"`
-	Model     string `json:"model,omitempty"`
-	MaxTokens int    `json:"max_tokens"`
-	BaseURL   string `json:"base_url,omitempty"`
+	Kind                       string          `json:"kind"`
+	Model                      string          `json:"model,omitempty"`
+	MaxTokens                  int             `json:"max_tokens"`
+	BaseURL                    string          `json:"base_url,omitempty"`
+	Capabilities               map[string]bool `json:"capabilities,omitempty"`
+	CapabilityMismatchBehavior string          `json:"capability_mismatch_behavior,omitempty"`
 }
 
 type ToolSpec struct {
@@ -326,6 +328,10 @@ func ValidateManifest(manifest Manifest) error {
 	}
 	if manifest.Provider.MaxTokens < 1 {
 		return validationError("provider.max_tokens must be >= 1")
+	}
+	if behavior := manifest.Provider.CapabilityMismatchBehavior; behavior != "" &&
+		behavior != "metadata_fallback" && behavior != "error" {
+		return validationError("provider.capability_mismatch_behavior must be metadata_fallback or error")
 	}
 	if err := validateTools(manifest.Tools); err != nil {
 		return err
@@ -632,16 +638,35 @@ func ProjectionForWithRegistry(provider ProviderSpec, system string, registry *R
 func ProjectionForWithRegistryAndStore(provider ProviderSpec, system string, registry *Registry, store AttachmentStore) Projection {
 	switch provider.Kind {
 	case "openai", "ollama":
-		return OpenAIProjection{Model: provider.Model, System: system, Registry: registry, Store: store}
+		return OpenAIProjection{
+			Model:                      provider.Model,
+			System:                     system,
+			Registry:                   registry,
+			Store:                      store,
+			ProviderKind:               provider.Kind,
+			Capabilities:               provider.Capabilities,
+			CapabilityMismatchBehavior: provider.CapabilityMismatchBehavior,
+		}
 	case "gemini":
-		return GeminiProjection{Model: provider.Model, System: system, Registry: registry, Store: store}
+		return GeminiProjection{
+			Model:                      provider.Model,
+			System:                     system,
+			Registry:                   registry,
+			Store:                      store,
+			ProviderKind:               provider.Kind,
+			Capabilities:               provider.Capabilities,
+			CapabilityMismatchBehavior: provider.CapabilityMismatchBehavior,
+		}
 	default:
 		return AnthropicProjection{
-			Model:     provider.Model,
-			MaxTokens: provider.MaxTokens,
-			System:    system,
-			Registry:  registry,
-			Store:     store,
+			Model:                      provider.Model,
+			MaxTokens:                  provider.MaxTokens,
+			System:                     system,
+			Registry:                   registry,
+			Store:                      store,
+			ProviderKind:               provider.Kind,
+			Capabilities:               provider.Capabilities,
+			CapabilityMismatchBehavior: provider.CapabilityMismatchBehavior,
 		}
 	}
 }

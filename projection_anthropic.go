@@ -6,11 +6,14 @@ import (
 )
 
 type AnthropicProjection struct {
-	Model     string
-	MaxTokens int
-	System    string
-	Registry  *Registry
-	Store     AttachmentStore
+	Model                      string
+	MaxTokens                  int
+	System                     string
+	Registry                   *Registry
+	Store                      AttachmentStore
+	ProviderKind               string
+	Capabilities               map[string]bool
+	CapabilityMismatchBehavior string
 }
 
 func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
@@ -111,12 +114,24 @@ func (p AnthropicProjection) contentBlocks(payload map[string]any) ([]any, error
 		case "text":
 			blocks = append(blocks, map[string]any{"type": "text", "text": stringValue(block["text"])})
 		case "image":
+			if fallback, ok, err := p.fallbackIfUnsupported(block); !ok || err != nil {
+				return nil, err
+			} else if fallback != nil {
+				blocks = append(blocks, fallback)
+				continue
+			}
 			wire, err := p.anthropicMediaBlock("image", block)
 			if err != nil {
 				return nil, err
 			}
 			blocks = append(blocks, wire)
 		case "document":
+			if fallback, ok, err := p.fallbackIfUnsupported(block); !ok || err != nil {
+				return nil, err
+			} else if fallback != nil {
+				blocks = append(blocks, fallback)
+				continue
+			}
 			wire, err := p.anthropicMediaBlock("document", block)
 			if err != nil {
 				return nil, err
@@ -127,6 +142,22 @@ func (p AnthropicProjection) contentBlocks(payload map[string]any) ([]any, error
 		}
 	}
 	return blocks, nil
+}
+
+func (p AnthropicProjection) fallbackIfUnsupported(block map[string]any) (map[string]any, bool, error) {
+	providerKind := p.ProviderKind
+	if providerKind == "" {
+		providerKind = "anthropic"
+	}
+	blockType := stringValue(block["type"])
+	if capabilitySupported(providerKind, p.Model, p.Capabilities, blockType) {
+		return nil, true, nil
+	}
+	if capabilityMismatchBehavior(p.CapabilityMismatchBehavior) == "error" {
+		return nil, false, capabilityMismatch(providerKind, p.Model, block)
+	}
+	fallback, err := fallbackContentBlock(block, p.Store)
+	return fallback, true, err
 }
 
 func (p AnthropicProjection) anthropicMediaBlock(kind string, block map[string]any) (map[string]any, error) {
@@ -177,10 +208,13 @@ func anthropicReasoningBlocks(event Event) []any {
 }
 
 type OpenAIProjection struct {
-	Model    string
-	System   string
-	Registry *Registry
-	Store    AttachmentStore
+	Model                      string
+	System                     string
+	Registry                   *Registry
+	Store                      AttachmentStore
+	ProviderKind               string
+	Capabilities               map[string]bool
+	CapabilityMismatchBehavior string
 }
 
 func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
@@ -257,16 +291,46 @@ func (p OpenAIProjection) content(payload map[string]any) (any, error) {
 		case "text":
 			wire = append(wire, map[string]any{"type": "text", "text": stringValue(block["text"])})
 		case "image":
+			if fallback, ok, err := p.fallbackIfUnsupported(block); !ok || err != nil {
+				return nil, err
+			} else if fallback != nil {
+				wire = append(wire, fallback)
+				continue
+			}
 			imageURL, err := p.imageURL(block)
 			if err != nil {
 				return nil, err
 			}
 			wire = append(wire, map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageURL}})
+		case "document":
+			if fallback, ok, err := p.fallbackIfUnsupported(block); !ok || err != nil {
+				return nil, err
+			} else if fallback != nil {
+				wire = append(wire, fallback)
+				continue
+			}
+			return nil, fmt.Errorf("OpenAI document content is not supported")
 		default:
 			return nil, fmt.Errorf("unsupported OpenAI content block type: %s", stringValue(block["type"]))
 		}
 	}
 	return wire, nil
+}
+
+func (p OpenAIProjection) fallbackIfUnsupported(block map[string]any) (map[string]any, bool, error) {
+	providerKind := p.ProviderKind
+	if providerKind == "" {
+		providerKind = "openai"
+	}
+	blockType := stringValue(block["type"])
+	if capabilitySupported(providerKind, p.Model, p.Capabilities, blockType) {
+		return nil, true, nil
+	}
+	if capabilityMismatchBehavior(p.CapabilityMismatchBehavior) == "error" {
+		return nil, false, capabilityMismatch(providerKind, p.Model, block)
+	}
+	fallback, err := fallbackContentBlock(block, p.Store)
+	return fallback, true, err
 }
 
 func (p OpenAIProjection) imageURL(block map[string]any) (string, error) {
@@ -314,10 +378,13 @@ func asMapSlice(value any) []map[string]any {
 }
 
 type GeminiProjection struct {
-	Model    string
-	System   string
-	Registry *Registry
-	Store    AttachmentStore
+	Model                      string
+	System                     string
+	Registry                   *Registry
+	Store                      AttachmentStore
+	ProviderKind               string
+	Capabilities               map[string]bool
+	CapabilityMismatchBehavior string
 }
 
 func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
@@ -372,6 +439,12 @@ func (p GeminiProjection) parts(payload map[string]any) ([]map[string]any, error
 				parts = append(parts, map[string]any{"text": text})
 			}
 		case "image", "document":
+			if fallback, ok, err := p.fallbackIfUnsupported(block); !ok || err != nil {
+				return nil, err
+			} else if fallback != nil {
+				parts = append(parts, map[string]any{"text": stringValue(fallback["text"])})
+				continue
+			}
 			resolved, err := resolveContentData(block, p.Store)
 			if err != nil {
 				return nil, err
@@ -385,6 +458,17 @@ func (p GeminiProjection) parts(payload map[string]any) ([]map[string]any, error
 		}
 	}
 	return parts, nil
+}
+
+func (p GeminiProjection) fallbackIfUnsupported(block map[string]any) (map[string]any, bool, error) {
+	if capabilitySupported("gemini", p.Model, p.Capabilities, stringValue(block["type"])) {
+		return nil, true, nil
+	}
+	if capabilityMismatchBehavior(p.CapabilityMismatchBehavior) == "error" {
+		return nil, false, capabilityMismatch("gemini", p.Model, block)
+	}
+	fallback, err := fallbackContentBlock(block, p.Store)
+	return fallback, true, err
 }
 
 func anthropicToolDescriptors(registry *Registry) []map[string]any {
