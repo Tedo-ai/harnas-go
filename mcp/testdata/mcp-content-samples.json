@@ -1,0 +1,48 @@
+[
+  {
+    "name": "text_join",
+    "content": [
+      { "type": "text", "text": "first" },
+      { "type": "text", "text": "second" }
+    ],
+    "expected": "first\n\nsecond"
+  },
+  {
+    "name": "image_decoded",
+    "content": [
+      { "type": "image", "mimeType": "image/png", "data": "aGVsbG8=" }
+    ],
+    "expected": "[image: image/png, 5 bytes]"
+  },
+  {
+    "name": "image_invalid_base64",
+    "content": [
+      { "type": "image", "mimeType": "image/png", "data": "not base64!" }
+    ],
+    "expected": "[image: image/png, 11 bytes]"
+  },
+  {
+    "name": "resource",
+    "content": [
+      { "type": "resource", "uri": "file:///story.md" }
+    ],
+    "expected": "[resource: file:///story.md]"
+  },
+  {
+    "name": "unknown",
+    "content": [
+      { "type": "audio" }
+    ],
+    "expected": "[audio]"
+  },
+  {
+    "name": "empty",
+    "content": [],
+    "expected": ""
+  },
+  {
+    "name": "null",
+    "content": null,
+    "expected": ""
+  }
+]

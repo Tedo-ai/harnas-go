@@ -8,7 +8,7 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.14.1** (2026-05-21). Tracks Harnas spec 0.14.1.
+**Version 0.15.0** (2026-05-21). Tracks Harnas spec 0.14.1.
 
 ## Status
 
@@ -32,6 +32,8 @@ surfaces needed for real Go adoption.
   persistence for debugging
 - Adopter helper APIs: `NewRuntime`, `TranscriptProject`,
   `ToolDescriptors`, and `ManifestSnapshotMetadata`
+- MCP adapter package: HTTP and stdio transports, content flattening,
+  Harnas tool descriptor translation, and degraded startup handling
 
 ## Run
 
@@ -78,6 +80,47 @@ bin/harnas project session.jsonl --manifest manifest.json [--from-seq N] [--to-s
 `project` renders the provider request body from a saved Log slice
 without making a provider call. It supports the conformance-facing
 Anthropic, OpenAI-compatible, and Gemini projections.
+
+## MCP
+
+The Go port includes `github.com/Tedo-ai/harnas-go/mcp` for consuming
+Model Context Protocol servers as Harnas tools. Connect to an MCP
+server, ask it for translated tool descriptors, and pass its dynamic
+handlers to the runtime:
+
+```go
+import "github.com/Tedo-ai/harnas-go/mcp"
+
+mcpClient, err := mcp.Connect(mcp.ConnectOptions{
+    URL:        "http://localhost:3001",
+    ServerName: "editorial-ai",
+    Headers:    map[string]string{"Authorization": "Bearer " + token},
+})
+if err != nil {
+    return err
+}
+defer mcpClient.Close()
+
+tools, err := mcpClient.Tools(ctx)
+if err != nil {
+    return err
+}
+handlers := mcpClient.ToolHandlers()
+
+manifest.Tools = append(manifest.Tools, tools...)
+loaded, err := harnas.BuildManifest(manifest, harnas.ManifestOptions{
+    ConfiguredHandlers: handlers,
+})
+if err != nil {
+    return err
+}
+runtime := &harnas.Runtime{Loaded: loaded}
+```
+
+`Tools(ctx)` performs lazy MCP initialize + `tools/list`, caches the
+translated descriptors, and degrades to an empty tool list if the MCP
+server is unavailable. `ToolHandlers()` returns the
+`mcp_passthrough.<server>` handler required by those descriptors.
 
 ## Live providers
 

@@ -2,14 +2,25 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
-## [Unreleased]
+## [0.15.0] — 2026-05-21
 
 ### Added
 
+- Added `mcp/`, a Model Context Protocol adapter package with HTTP
+  POST and stdio transports, MCP content flattening, Harnas tool
+  descriptor translation, dynamic passthrough tool handlers, custom
+  HTTP headers, lazy initialization, and degraded startup handling.
 - Tool handlers may now use the explicit `ToolHandlerV2` /
   `ConfiguredToolHandler` shape to receive the tool manifest config map.
   Existing single-argument `ToolHandler` callables continue to work
   unchanged; `WrapV1Handler` adapts them when a V2 handler is required.
+
+### Changed
+
+- First non-lockstep release. `harnas-ruby` remains at v0.14.1 with no
+  functional change, and the spec remains at v0.14.1 with no spec
+  change. The lockstep discipline applies to spec changes; library
+  feature additions may now ship independently per implementation.
 
 ## [0.14.1] — 2026-05-21
 
@@ -301,6 +312,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.15.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.15.0
 [0.14.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.1
 [0.14.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.13.0
