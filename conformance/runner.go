@@ -178,6 +178,10 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		NewStrategyEventCollector(strategyEventsPath, session.Observation)
 	}
 	registry := harnas.NewRegistry()
+	attachmentStore, err := loadAttachmentStore(filepath.Dir(scriptPath))
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	builtinHandlers := harnas.BuiltinHandlers()
 	builtinHandlers["harnas.builtin.fetch_url"] = func(args map[string]any) (string, error) {
 		if stringValue(args["url"]) == "https://api.example.com/data" {
@@ -219,7 +223,7 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 
 	loop := harnas.AgentLoop{
 		Session:    session,
-		Projection: harnas.ProjectionForWithRegistry(manifest.Provider, manifest.System, registry),
+		Projection: harnas.ProjectionForWithRegistryAndStore(manifest.Provider, manifest.System, registry, attachmentStore),
 		Ingestor:   harnas.IngestorFor(manifest.Provider.Kind),
 		RetryPolicy: &harnas.RetryPolicy{
 			MaxAttempts:   3,
@@ -292,9 +296,11 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 				loop.Session = reloaded
 				continue
 			}
-			input = action["user"]
+			if user, ok := action["user"]; ok {
+				input = user
+			}
 		}
-		session.Log.Append(harnas.EventUserMessage, map[string]any{"text": stringValue(input)})
+		session.Log.Append(harnas.EventUserMessage, userPayload(input))
 		if _, err := loop.Run(); err != nil {
 			return nil, nil, nil, err
 		}
@@ -317,6 +323,38 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		}
 	}
 	return session, deltas, strategyEvents, nil
+}
+
+func userPayload(input any) map[string]any {
+	if action, ok := input.(map[string]any); ok {
+		if content, ok := action["content"]; ok {
+			return map[string]any{"content": content}
+		}
+		return map[string]any{"text": stringValue(action["user"])}
+	}
+	return map[string]any{"text": stringValue(input)}
+}
+
+func loadAttachmentStore(fixtureDir string) (harnas.AttachmentStore, error) {
+	store := harnas.NewMemoryStore()
+	path := filepath.Join(fixtureDir, "attachments.json")
+	if !fileExists(path) {
+		return store, nil
+	}
+	var specs []map[string]any
+	if err := readJSON(path, &specs); err != nil {
+		return nil, err
+	}
+	for _, spec := range specs {
+		data, err := os.ReadFile(filepath.Join(fixtureDir, stringValue(spec["path"])))
+		if err != nil {
+			return nil, err
+		}
+		if _, err := store.Put(data, stringValue(spec["media_type"])); err != nil {
+			return nil, err
+		}
+	}
+	return store, nil
 }
 
 func manifestSnapshot(manifest harnas.Manifest) map[string]any {
