@@ -1,6 +1,9 @@
 package harnas
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestDelegationProjections(t *testing.T) {
 	parent := NewSession("ses_parent", NewLog(), nil)
@@ -56,5 +59,58 @@ func TestDelegationProjections(t *testing.T) {
 	}
 	if usage["total_tokens"] != 12 {
 		t.Fatalf("unexpected usage: %#v", usage)
+	}
+}
+
+func TestDelegationProjectionRejectsBrokenChildLink(t *testing.T) {
+	parent := NewSession("ses_parent", NewLog(), nil)
+	parent.Log.Append(EventAgentSpawn, map[string]any{
+		"spawn_id":         "spn_1",
+		"child_session_id": "ses_child",
+		"task":             "audit",
+	})
+	child := NewSession("ses_child", NewLog(), nil)
+	child.ParentSessionID = "ses_other"
+	child.SpawnID = "spn_1"
+
+	_, err := DelegationTree("ses_parent", SessionMap{"ses_parent": parent, "ses_child": child})
+	if err == nil || !strings.Contains(err.Error(), "broken delegation link") {
+		t.Fatalf("expected broken link error, got %v", err)
+	}
+}
+
+func TestDelegationProjectionRejectsDuplicateResult(t *testing.T) {
+	parent := NewSession("ses_parent", NewLog(), nil)
+	spawn := parent.Log.Append(EventAgentSpawn, map[string]any{
+		"spawn_id":         "spn_1",
+		"child_session_id": "ses_child",
+		"task":             "audit",
+	})
+	parent.Log.Append(EventAgentResult, map[string]any{"spawn_id": "spn_1", "child_session_id": "ses_child", "status": "failed"})
+	parent.Log.Append(EventAgentResult, map[string]any{"spawn_id": "spn_1", "child_session_id": "ses_child", "status": "succeeded"})
+	child := NewSession("ses_child", NewLog(), nil)
+	child.ParentSessionID = "ses_parent"
+	child.SpawnID = "spn_1"
+	child.SpawnedByEventID = spawn.ID
+
+	_, err := DelegationTree("ses_parent", SessionMap{"ses_parent": parent, "ses_child": child})
+	if err == nil || !strings.Contains(err.Error(), "multiple agent_result") {
+		t.Fatalf("expected duplicate result error, got %v", err)
+	}
+}
+
+func TestDelegationProjectionRejectsCycles(t *testing.T) {
+	a := NewSession("ses_a", NewLog(), nil)
+	a.ParentSessionID = "ses_b"
+	a.SpawnID = "spn_b"
+	b := NewSession("ses_b", NewLog(), nil)
+	b.ParentSessionID = "ses_a"
+	b.SpawnID = "spn_a"
+	a.Log.Append(EventAgentSpawn, map[string]any{"spawn_id": "spn_a", "child_session_id": "ses_b", "task": "b"})
+	b.Log.Append(EventAgentSpawn, map[string]any{"spawn_id": "spn_b", "child_session_id": "ses_a", "task": "a"})
+
+	_, err := DelegationTree("ses_a", SessionMap{"ses_a": a, "ses_b": b})
+	if err == nil || !strings.Contains(err.Error(), "delegation cycle") {
+		t.Fatalf("expected cycle error, got %v", err)
 	}
 }
