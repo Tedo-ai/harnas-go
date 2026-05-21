@@ -2,6 +2,22 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.16.0] — 2026-05-21
+
+### Added
+
+- Added `credential/proxy`, a `:pre_tool_use` strategy that injects
+  credential-backed headers into supported tool arguments while keeping
+  credential values out of the Log and Observation stream.
+- `fetch_url` now accepts optional request headers so credential/proxy can
+  authorize HTTP calls without exposing secrets to the model.
+
+### Changed
+
+- Lockstep spec release. Validated against fixtures version `0.16.0`.
+- Conformance now passes 46/46 fixtures, including
+  `with-credential-proxy-injection`.
+
 ## [0.15.0] — 2026-05-21
 
 ### Added
@@ -312,6 +328,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.16.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.16.0
 [0.15.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.15.0
 [0.14.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.1
 [0.14.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.14.0

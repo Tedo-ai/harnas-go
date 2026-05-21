@@ -278,7 +278,7 @@ func (l AgentLoop) dispatchPendingTools() []Event {
 				},
 			})
 		} else {
-			l.Runner.Run(toolUse, l.Session.Log)
+			l.Runner.Run(toolUseWithArgumentOverrides(toolUse, decisions), l.Session.Log)
 		}
 		l.Session.Hooks.Invoke("post_tool_use", map[string]any{
 			"session":     l.Session,
@@ -288,6 +288,26 @@ func (l AgentLoop) dispatchPendingTools() []Event {
 		})
 	}
 	return pending
+}
+
+func toolUseWithArgumentOverrides(toolUse Event, decisions []any) Event {
+	for _, decision := range decisions {
+		result, ok := decision.(map[string]any)
+		if !ok {
+			continue
+		}
+		arguments, ok := result["arguments"].(map[string]any)
+		if !ok {
+			continue
+		}
+		payload := map[string]any{}
+		for key, value := range toolUse.Payload {
+			payload[key] = value
+		}
+		payload["arguments"] = arguments
+		return Event{Seq: toolUse.Seq, ID: toolUse.ID, Type: toolUse.Type, Payload: payload}
+	}
+	return toolUse
 }
 
 func deniedByHook(decisions []any) (bool, string) {

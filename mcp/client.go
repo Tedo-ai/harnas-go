@@ -14,7 +14,7 @@ import (
 const (
 	ProtocolVersion = "2024-11-05"
 	ClientName      = "harnas-go"
-	ClientVersion   = "0.15.0"
+	ClientVersion   = "0.16.0"
 	DefaultTimeout  = 30 * time.Second
 )
 

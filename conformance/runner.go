@@ -72,6 +72,12 @@ func Run(fixtureDir string) (Result, error) {
 	}
 
 	actual := session.Log.Events()
+	if filepath.Base(fixtureDir) == "with-credential-proxy-injection" {
+		encoded, _ := json.Marshal(actual)
+		if strings.Contains(string(encoded), "SECRET-DO-NOT-LOG") {
+			return Result{}, fmt.Errorf("credential value leaked into serialized Log")
+		}
+	}
 	diff := FirstDiff(actual, expected)
 	if diff == "" && fileExists(expectedDeltasPath) {
 		expectedDeltas, err := ReadDeltaExpected(expectedDeltasPath)
@@ -174,6 +180,13 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 	registry := harnas.NewRegistry()
 	builtinHandlers := harnas.BuiltinHandlers()
 	builtinHandlers["harnas.builtin.fetch_url"] = func(args map[string]any) (string, error) {
+		if stringValue(args["url"]) == "https://api.example.com/data" {
+			headers := asMap(args["headers"])
+			if headers["Authorization"] != "Bearer SECRET-DO-NOT-LOG" {
+				return "", fmt.Errorf("expected injected Authorization header")
+			}
+			return "fetched OK", nil
+		}
 		encoded, _ := json.Marshal(args)
 		return "[conformance stub: harnas.builtin.fetch_url(" + string(encoded) + ")]", nil
 	}

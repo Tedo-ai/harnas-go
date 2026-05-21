@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"os/exec"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -203,6 +205,95 @@ type HealthGuard struct {
 type CostBudgetGuard struct {
 	MaxInputTokens  int
 	MaxOutputTokens int
+}
+
+type CredentialProxy struct {
+	Credentials map[string]CredentialProxyCredential
+	Routes      []CredentialProxyRoute
+}
+
+type CredentialProxyCredential struct {
+	From  string
+	Name  string
+	Value string
+}
+
+type CredentialProxyRoute struct {
+	Tool   string
+	Match  CredentialProxyMatch
+	Inject CredentialProxyInject
+	Index  int
+}
+
+type CredentialProxyMatch struct {
+	URLHost     string
+	URLHostGlob string
+}
+
+type CredentialProxyInject struct {
+	Into  string
+	Key   string
+	Value string
+}
+
+func NewCredentialProxy(config map[string]any) (CredentialProxy, error) {
+	proxy := CredentialProxy{
+		Credentials: map[string]CredentialProxyCredential{},
+		Routes:      []CredentialProxyRoute{},
+	}
+	for name, raw := range asMap(config["credentials"]) {
+		credential := asMap(raw)
+		from := stringValue(credential["from"])
+		if from != "env" && from != "literal" {
+			return proxy, validationError("credential/proxy credential %q has unknown from %q", name, from)
+		}
+		proxy.Credentials[name] = CredentialProxyCredential{
+			From:  from,
+			Name:  stringValue(credential["name"]),
+			Value: stringValue(credential["value"]),
+		}
+	}
+	for index, raw := range anySlice(config["routes"]) {
+		routeMap := asMap(raw)
+		route := CredentialProxyRoute{
+			Tool:  stringValue(routeMap["tool"]),
+			Match: credentialProxyMatch(asMap(routeMap["match"])),
+			Inject: CredentialProxyInject{
+				Into:  stringValue(asMap(routeMap["inject"])["into"]),
+				Key:   stringValue(asMap(routeMap["inject"])["key"]),
+				Value: stringValue(asMap(routeMap["inject"])["value"]),
+			},
+			Index: index,
+		}
+		if route.Tool == "" || route.Inject.Into == "" || route.Inject.Key == "" {
+			return proxy, validationError("credential/proxy route %d is malformed", index)
+		}
+		if route.Inject.Into != "headers" {
+			return proxy, validationError("credential/proxy route %d has unsupported inject.into %q", index, route.Inject.Into)
+		}
+		if route.Match.URLHost != "" && route.Match.URLHostGlob != "" {
+			return proxy, validationError("credential/proxy route %d must specify only one URL host matcher", index)
+		}
+		proxy.Routes = append(proxy.Routes, route)
+	}
+	return proxy, nil
+}
+
+func credentialProxyMatch(values map[string]any) CredentialProxyMatch {
+	return CredentialProxyMatch{
+		URLHost:     stringValue(values["url_host"]),
+		URLHostGlob: stringValue(values["url_host_glob"]),
+	}
+}
+
+func anySlice(value any) []any {
+	if value == nil {
+		return nil
+	}
+	if values, ok := value.([]any); ok {
+		return values
+	}
+	return nil
 }
 
 func (t TimeoutGuard) Install(session *Session) {
@@ -546,6 +637,152 @@ func (n NetworkSandbox) Install(session *Session) {
 			"reason": sandboxNetworkMessage(host, allow),
 		}
 	})
+}
+
+func (c CredentialProxy) Install(session *Session) {
+	consecutiveMissing := 0
+	session.Hooks.On("pre_tool_use", func(ctx map[string]any) any {
+		toolUse, _ := ctx["tool_use"].(Event)
+		name, _ := toolUse.Payload["name"].(string)
+		args := asMap(toolUse.Payload["arguments"])
+		rewritten := copyCredentialMap(args)
+		changed := false
+		for _, route := range c.Routes {
+			if route.Tool != name || !credentialRouteMatches(route, args) {
+				continue
+			}
+			if route.Inject.Into != "headers" || name != "fetch_url" {
+				session.Log.Append(EventRuntimeError, map[string]any{
+					"source":      "strategy",
+					"handler":     "credential/proxy",
+					"error_class": "Harnas::CredentialProxy",
+					"message":     "credential_proxy_unsupported_tool",
+					"reason":      "credential_proxy_unsupported_tool",
+					"terminal":    false,
+				})
+				return map[string]any{"allow": false, "reason": "credential_proxy_unsupported_tool"}
+			}
+			value, names, ok := c.resolveTemplate(route.Inject.Value)
+			if !ok {
+				consecutiveMissing++
+				if consecutiveMissing >= 3 {
+					session.Log.Append(EventRuntimeError, map[string]any{
+						"source":      "strategy",
+						"handler":     "credential/proxy",
+						"error_class": "Harnas::CredentialProxy",
+						"message":     "credential_proxy_missing_persistent",
+						"reason":      "credential_proxy_missing_persistent",
+						"terminal":    true,
+					})
+					panic(TurnFailed{Message: "credential_proxy_missing_persistent"})
+				}
+				return map[string]any{"allow": false, "reason": credentialMissingReason(names, name)}
+			}
+			headers := copyStringMap(asMap(rewritten["headers"]))
+			headers[route.Inject.Key] = value
+			rewritten["headers"] = headers
+			changed = true
+			consecutiveMissing = 0
+			session.Log.Append(EventAnnotation, map[string]any{
+				"kind":             "credential_injected",
+				"tool":             name,
+				"route_index":      float64(route.Index),
+				"credentials_used": anyStringSlice(names),
+			})
+		}
+		if !changed {
+			return map[string]any{"allow": true}
+		}
+		return map[string]any{"allow": true, "arguments": rewritten}
+	})
+}
+
+func credentialRouteMatches(route CredentialProxyRoute, args map[string]any) bool {
+	if route.Match.URLHost == "" && route.Match.URLHostGlob == "" {
+		return true
+	}
+	host, ok := networkSandboxHost(stringValue(args["url"]))
+	if !ok {
+		return false
+	}
+	if route.Match.URLHost != "" {
+		return host == route.Match.URLHost
+	}
+	matched, err := path.Match(route.Match.URLHostGlob, host)
+	return err == nil && matched
+}
+
+func (c CredentialProxy) resolveTemplate(template string) (string, []string, bool) {
+	value := template
+	names := []string{}
+	for {
+		start := strings.Index(value, "{credential.")
+		if start < 0 {
+			return value, names, true
+		}
+		end := strings.Index(value[start:], "}")
+		if end < 0 {
+			return value, names, true
+		}
+		end += start
+		name := value[start+len("{credential.") : end]
+		names = append(names, name)
+		credential, ok := c.Credentials[name]
+		if !ok {
+			return "", names, false
+		}
+		resolved, ok := credential.Resolve()
+		if !ok {
+			return "", names, false
+		}
+		value = value[:start] + resolved + value[end+1:]
+	}
+}
+
+func (c CredentialProxyCredential) Resolve() (string, bool) {
+	switch c.From {
+	case "literal":
+		return c.Value, true
+	case "env":
+		value, ok := envLookup(c.Name)
+		return value, ok
+	default:
+		return "", false
+	}
+}
+
+var envLookup = func(name string) (string, bool) { return os.LookupEnv(name) }
+
+func credentialMissingReason(names []string, tool string) string {
+	name := ""
+	if len(names) > 0 {
+		name = names[0]
+	}
+	return fmt.Sprintf("credential '%s' is not available; required by credential/proxy route matching tool '%s'", name, tool)
+}
+
+func copyCredentialMap(in map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func copyStringMap(in map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range in {
+		out[key] = stringValue(value)
+	}
+	return out
+}
+
+func anyStringSlice(values []string) []any {
+	out := make([]any, 0, len(values))
+	for _, value := range values {
+		out = append(out, value)
+	}
+	return out
 }
 
 func networkSandboxHost(rawURL string) (string, bool) {

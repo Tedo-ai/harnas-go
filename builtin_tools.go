@@ -148,9 +148,12 @@ func BuiltinDescriptors() []ToolSpec {
 			Handler:     "harnas.builtin.fetch_url",
 			Description: "Fetch a URL via HTTP GET and return the response body as text.",
 			InputSchema: map[string]any{
-				"type":       "object",
-				"properties": map[string]any{"url": map[string]any{"type": "string"}},
-				"required":   []any{"url"},
+				"type": "object",
+				"properties": map[string]any{
+					"url":     map[string]any{"type": "string"},
+					"headers": map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
+				},
+				"required": []any{"url"},
 			},
 		},
 		{
@@ -413,7 +416,14 @@ func BuiltinFetchURL(args map[string]any) (string, error) {
 	if !strings.HasPrefix(url, "http://") && !strings.HasPrefix(url, "https://") {
 		return "", fmt.Errorf("only http(s) is supported")
 	}
-	response, err := http.Get(url)
+	request, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return "", err
+	}
+	for key, value := range asMap(args["headers"]) {
+		request.Header.Set(key, stringValue(value))
+	}
+	response, err := http.DefaultClient.Do(request)
 	if err != nil {
 		return "", err
 	}
