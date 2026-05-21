@@ -1,19 +1,26 @@
 package harnas
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 type AnthropicProjection struct {
 	Model     string
 	MaxTokens int
 	System    string
 	Registry  *Registry
+	Store     AttachmentStore
 }
 
 func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
 	groups := []map[string]any{}
 	var current map[string]any
 	for _, event := range ApplyMutations(log) {
-		role, blocks := p.translate(event)
+		role, blocks, err := p.translate(event)
+		if err != nil {
+			return nil, err
+		}
 		if role == "" || len(blocks) == 0 {
 			continue
 		}
@@ -47,24 +54,27 @@ func (p AnthropicProjection) Project(log *Log) (map[string]any, error) {
 	return request, nil
 }
 
-func (p AnthropicProjection) translate(event Event) (string, []any) {
-	text, _ := event.Payload["text"].(string)
+func (p AnthropicProjection) translate(event Event) (string, []any, error) {
 	switch event.Type {
 	case EventUserMessage, EventSummary:
-		return "user", []any{map[string]any{"type": "text", "text": text}}
+		blocks, err := p.contentBlocks(event.Payload)
+		return "user", blocks, err
 	case EventAssistantMessage:
 		blocks := anthropicReasoningBlocks(event)
-		if text != "" {
-			blocks = append(blocks, map[string]any{"type": "text", "text": text})
+		contentBlocks, err := p.contentBlocks(event.Payload)
+		if err != nil {
+			return "", nil, err
 		}
-		return "assistant", blocks
+		contentBlocks = nonEmptyAnthropicTextBlocks(contentBlocks)
+		blocks = append(blocks, contentBlocks...)
+		return "assistant", blocks, nil
 	case EventToolUse:
 		return "assistant", []any{map[string]any{
 			"type":  "tool_use",
 			"id":    event.Payload["id"],
 			"name":  event.Payload["name"],
 			"input": asMap(event.Payload["arguments"]),
-		}}
+		}}, nil
 	case EventToolResult:
 		block := map[string]any{
 			"type":        "tool_result",
@@ -76,10 +86,69 @@ func (p AnthropicProjection) translate(event Event) (string, []any) {
 		} else {
 			block["content"] = stringValue(event.Payload["output"])
 		}
-		return "user", []any{block}
+		return "user", []any{block}, nil
 	default:
-		return "", nil
+		return "", nil, nil
 	}
+}
+
+func nonEmptyAnthropicTextBlocks(blocks []any) []any {
+	out := []any{}
+	for _, block := range blocks {
+		mapped := asMap(block)
+		if mapped["type"] == "text" && stringValue(mapped["text"]) == "" {
+			continue
+		}
+		out = append(out, block)
+	}
+	return out
+}
+
+func (p AnthropicProjection) contentBlocks(payload map[string]any) ([]any, error) {
+	var blocks []any
+	for _, block := range messageContentBlocks(payload) {
+		switch stringValue(block["type"]) {
+		case "text":
+			blocks = append(blocks, map[string]any{"type": "text", "text": stringValue(block["text"])})
+		case "image":
+			wire, err := p.anthropicMediaBlock("image", block)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, wire)
+		case "document":
+			wire, err := p.anthropicMediaBlock("document", block)
+			if err != nil {
+				return nil, err
+			}
+			blocks = append(blocks, wire)
+		default:
+			return nil, fmt.Errorf("unsupported content block type: %s", stringValue(block["type"]))
+		}
+	}
+	return blocks, nil
+}
+
+func (p AnthropicProjection) anthropicMediaBlock(kind string, block map[string]any) (map[string]any, error) {
+	source := asMap(block["source"])
+	if kind == "image" && source["kind"] == "url" {
+		return map[string]any{
+			"type":   "image",
+			"source": map[string]any{"type": "url", "url": stringValue(source["url"])},
+		}, nil
+	}
+	resolved, err := resolveContentData(block, p.Store)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{
+		"type": kind,
+		"source": map[string]any{
+			"type":       "base64",
+			"media_type": resolved.MediaType,
+			"data":       resolved.Data,
+		},
+	}, nil
 }
 
 func finalizeAnthropicGroup(role string, blocks []any) map[string]any {
@@ -111,6 +180,7 @@ type OpenAIProjection struct {
 	Model    string
 	System   string
 	Registry *Registry
+	Store    AttachmentStore
 }
 
 func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
@@ -119,12 +189,19 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 		messages = append(messages, map[string]any{"role": "system", "content": p.System})
 	}
 	for _, event := range ApplyMutations(log) {
-		text, _ := event.Payload["text"].(string)
 		switch event.Type {
 		case EventUserMessage, EventSummary:
-			messages = append(messages, map[string]any{"role": "user", "content": text})
+			content, err := p.content(event.Payload)
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, map[string]any{"role": "user", "content": content})
 		case EventAssistantMessage:
-			messages = append(messages, map[string]any{"role": "assistant", "content": text})
+			content, err := p.content(event.Payload)
+			if err != nil {
+				return nil, err
+			}
+			messages = append(messages, map[string]any{"role": "assistant", "content": openAIContentForAssistant(content)})
 		case EventToolUse:
 			toolCall := map[string]any{
 				"id":   event.Payload["id"],
@@ -169,6 +246,48 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 	return request, nil
 }
 
+func (p OpenAIProjection) content(payload map[string]any) (any, error) {
+	blocks := messageContentBlocks(payload)
+	if len(blocks) == 1 && stringValue(blocks[0]["type"]) == "text" {
+		return stringValue(blocks[0]["text"]), nil
+	}
+	var wire []map[string]any
+	for _, block := range blocks {
+		switch stringValue(block["type"]) {
+		case "text":
+			wire = append(wire, map[string]any{"type": "text", "text": stringValue(block["text"])})
+		case "image":
+			imageURL, err := p.imageURL(block)
+			if err != nil {
+				return nil, err
+			}
+			wire = append(wire, map[string]any{"type": "image_url", "image_url": map[string]any{"url": imageURL}})
+		default:
+			return nil, fmt.Errorf("unsupported OpenAI content block type: %s", stringValue(block["type"]))
+		}
+	}
+	return wire, nil
+}
+
+func (p OpenAIProjection) imageURL(block map[string]any) (string, error) {
+	source := asMap(block["source"])
+	if source["kind"] == "url" {
+		return stringValue(source["url"]), nil
+	}
+	resolved, err := resolveContentData(block, p.Store)
+	if err != nil {
+		return "", err
+	}
+	return "data:" + resolved.MediaType + ";base64," + resolved.Data, nil
+}
+
+func openAIContentForAssistant(content any) any {
+	if text, ok := content.(string); ok {
+		return text
+	}
+	return content
+}
+
 func mustJSON(value any) string {
 	data, err := json.Marshal(value)
 	if err != nil {
@@ -198,23 +317,31 @@ type GeminiProjection struct {
 	Model    string
 	System   string
 	Registry *Registry
+	Store    AttachmentStore
 }
 
 func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
 	contents := []map[string]any{}
 	for _, event := range ApplyMutations(log) {
-		text, _ := event.Payload["text"].(string)
 		switch event.Type {
 		case EventUserMessage, EventSummary:
+			parts, err := p.parts(event.Payload)
+			if err != nil {
+				return nil, err
+			}
 			contents = append(contents, map[string]any{
 				"role":  "user",
-				"parts": []map[string]any{{"text": text}},
+				"parts": parts,
 			})
 		case EventAssistantMessage:
-			if text != "" {
+			parts, err := p.parts(event.Payload)
+			if err != nil {
+				return nil, err
+			}
+			if len(parts) > 0 {
 				contents = append(contents, map[string]any{
 					"role":  "model",
-					"parts": []map[string]any{{"text": text}},
+					"parts": parts,
 				})
 			}
 		}
@@ -233,6 +360,31 @@ func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
 		request["tools"] = geminiToolDescriptors(p.Registry)
 	}
 	return request, nil
+}
+
+func (p GeminiProjection) parts(payload map[string]any) ([]map[string]any, error) {
+	parts := []map[string]any{}
+	for _, block := range messageContentBlocks(payload) {
+		switch stringValue(block["type"]) {
+		case "text":
+			text := stringValue(block["text"])
+			if text != "" {
+				parts = append(parts, map[string]any{"text": text})
+			}
+		case "image", "document":
+			resolved, err := resolveContentData(block, p.Store)
+			if err != nil {
+				return nil, err
+			}
+			parts = append(parts, map[string]any{"inline_data": map[string]any{
+				"mime_type": resolved.MediaType,
+				"data":      resolved.Data,
+			}})
+		default:
+			return nil, fmt.Errorf("unsupported Gemini content block type: %s", stringValue(block["type"]))
+		}
+	}
+	return parts, nil
 }
 
 func anthropicToolDescriptors(registry *Registry) []map[string]any {

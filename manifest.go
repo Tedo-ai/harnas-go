@@ -83,6 +83,7 @@ type ManifestOptions struct {
 	Providers          map[string]Provider
 	StreamProviders    map[string]StreamProvider
 	APIKeys            map[string]string
+	AttachmentStore    AttachmentStore
 }
 
 type LoadedManifest struct {
@@ -239,7 +240,7 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err != nil {
 		return nil, err
 	}
-	projection := ProjectionForWithRegistry(manifest.Provider, manifest.System, registry)
+	projection := ProjectionForWithRegistryAndStore(manifest.Provider, manifest.System, registry, options.AttachmentStore)
 	provider, err := providerFor(manifest.Provider, options)
 	if err != nil {
 		return nil, err
@@ -625,17 +626,22 @@ func ProjectionFor(provider ProviderSpec, system string) Projection {
 }
 
 func ProjectionForWithRegistry(provider ProviderSpec, system string, registry *Registry) Projection {
+	return ProjectionForWithRegistryAndStore(provider, system, registry, nil)
+}
+
+func ProjectionForWithRegistryAndStore(provider ProviderSpec, system string, registry *Registry, store AttachmentStore) Projection {
 	switch provider.Kind {
 	case "openai", "ollama":
-		return OpenAIProjection{Model: provider.Model, System: system, Registry: registry}
+		return OpenAIProjection{Model: provider.Model, System: system, Registry: registry, Store: store}
 	case "gemini":
-		return GeminiProjection{Model: provider.Model, System: system, Registry: registry}
+		return GeminiProjection{Model: provider.Model, System: system, Registry: registry, Store: store}
 	default:
 		return AnthropicProjection{
 			Model:     provider.Model,
 			MaxTokens: provider.MaxTokens,
 			System:    system,
 			Registry:  registry,
+			Store:     store,
 		}
 	}
 }
