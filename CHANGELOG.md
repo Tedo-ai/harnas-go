@@ -2,6 +2,21 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.18.0] — 2026-05-21
+
+### Added
+
+- Lockstep spec release. Validated against fixtures version `0.18.0`.
+- Added subagent delegation event support, Session header delegation
+  metadata, capability manifest helpers, and cross-session projection
+  helpers.
+- Added support for projection conformance fixtures via
+  `expected-projections.jsonl`.
+- Added optional `harnas.builtin.spawn_agent`, which records an
+  `agent_spawn` receipt and returns generated child identifiers.
+- Conformance now passes 59/59 fixtures, including the five subagent
+  delegation fixtures.
+
 ## [0.17.0] — 2026-05-21
 
 ### Added
@@ -346,6 +361,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.18.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.0
 [0.17.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.17.0
 [0.16.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.16.0
 [0.15.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.15.0
