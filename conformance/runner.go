@@ -55,6 +55,7 @@ func Run(fixtureDir string) (Result, error) {
 	expectedDeltasPath := filepath.Join(fixtureDir, "expected-deltas.jsonl")
 	expectedStrategyEventsPath := filepath.Join(fixtureDir, "expected-strategy-events.jsonl")
 	expectedSpawnChildrenPath := filepath.Join(fixtureDir, "expected-spawn-children.json")
+	expectedToolDescriptorsPath := filepath.Join(fixtureDir, "expected-tool-descriptors.json")
 	cwd, err := os.Getwd()
 	if err != nil {
 		return Result{}, err
@@ -100,6 +101,12 @@ func Run(fixtureDir string) (Result, error) {
 			return Result{}, err
 		}
 		diff = FirstStrategyEventDiff(actualStrategyEvents, expectedStrategyEvents)
+	}
+	if diff == "" && fileExists(expectedToolDescriptorsPath) {
+		diff, err = toolDescriptorDiff(session, expectedToolDescriptorsPath)
+		if err != nil {
+			return Result{}, err
+		}
 	}
 	return Result{
 		Fixture:  fixture,
@@ -323,7 +330,7 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 			Handler:     tool.Handler,
 			Description: tool.Description,
 			InputSchema: tool.InputSchema,
-			Config:      tool.Config,
+			Config:      conformanceToolConfig(tool),
 		}
 		if handler := configuredHandlers[tool.Handler]; handler != nil {
 			registered.CallConfig = handler
@@ -332,6 +339,7 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		}
 		registry.Register(registered)
 	}
+	session.Metadata["tools"] = harnas.ToolDescriptors(registry)
 	strategies, err := harnas.BuildStrategies(manifest.Strategies, nil)
 	if err != nil {
 		return nil, nil, nil, err
@@ -454,6 +462,22 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		}
 	}
 	return session, deltas, strategyEvents, nil
+}
+
+func conformanceToolConfig(tool harnas.ToolSpec) map[string]any {
+	config := map[string]any{}
+	for key, value := range tool.Config {
+		config[key] = value
+	}
+	if tool.Handler == "harnas.builtin.bash_session" {
+		if stringValue(config["shell"]) == "" {
+			config["shell"] = "auto"
+		}
+		if shellType := stringValue(config["shell_type"]); shellType == "" || shellType == "auto" {
+			config["shell_type"] = "posix"
+		}
+	}
+	return config
 }
 
 func eventIDs(events []harnas.Event) []string {
@@ -832,6 +856,35 @@ func FirstStrategyEventDiff(actual, expected []StrategyEventRow) string {
 		}
 	}
 	return fmt.Sprintf("strategy event length actual=%d expected=%d", len(actual), len(expected))
+}
+
+func toolDescriptorDiff(session *harnas.Session, expectedPath string) (string, error) {
+	metadata, _ := session.Metadata["tools"].([]harnas.ToolSpec)
+	if metadata == nil {
+		raw, ok := session.Metadata["tools"]
+		if !ok {
+			return "missing tools metadata", nil
+		}
+		var specs []harnas.ToolSpec
+		data, _ := json.Marshal(raw)
+		if err := json.Unmarshal(data, &specs); err != nil {
+			return "", err
+		}
+		metadata = specs
+	}
+	var actual any
+	data, _ := json.Marshal(metadata)
+	if err := json.Unmarshal(data, &actual); err != nil {
+		return "", err
+	}
+	var expected any
+	if err := readJSON(expectedPath, &expected); err != nil {
+		return "", err
+	}
+	if reflect.DeepEqual(actual, expected) {
+		return "", nil
+	}
+	return fmt.Sprintf("tool descriptors actual=%#v expected=%#v", actual, expected), nil
 }
 
 type StrategyEventCollector struct {

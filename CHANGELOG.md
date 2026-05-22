@@ -2,6 +2,24 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.18.2] — 2026-05-22
+
+### Added
+
+- Added Windows compile-check coverage to CI for Go 1.22 and 1.23.
+- Added `shell_type` resolution for `harnas.builtin.bash_session` tool
+  config and validated against fixtures version `0.18.2`: 62/62.
+
+### Changed
+
+- Split `bash_session` process control into Unix and Windows build-tagged
+  helpers. Unix keeps process-group cleanup; Windows uses shell process
+  termination with the documented descendant-cleanup limitation.
+- Isolated MCP stdio process-control helpers behind the same OS-specific
+  pattern so Windows builds compile cleanly.
+- Lockstep patch release driven by AgentStaple's Windows preview
+  packaging work.
+
 ## [0.18.1] — 2026-05-22
 
 ### Added
@@ -380,6 +398,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.18.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.2
 [0.18.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.1
 [0.18.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.0
 [0.17.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.17.0

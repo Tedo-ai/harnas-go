@@ -438,12 +438,16 @@ func BuildRegistryWithConfigured(specs []ToolSpec, handlers map[string]ToolHandl
 		if handler == nil && configuredHandler == nil {
 			return nil, unresolvedHandlerError("tool handler %q not in tool_handlers", spec.Handler)
 		}
+		config := spec.Config
+		if spec.Handler == "harnas.builtin.bash_session" {
+			config = effectiveBashSessionConfig(config)
+		}
 		if err := registry.Register(Tool{
 			Name:        spec.Name,
 			Handler:     spec.Handler,
 			Description: spec.Description,
 			InputSchema: spec.InputSchema,
-			Config:      spec.Config,
+			Config:      config,
 			Call:        handler,
 			CallConfig:  configuredHandler,
 		}); err != nil {

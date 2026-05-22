@@ -183,6 +183,11 @@ func BuiltinDescriptors() []ToolSpec {
 					"env":        map[string]any{"type": "object", "additionalProperties": map[string]any{"type": "string"}},
 				},
 			},
+			Config: map[string]any{
+				"shell":            "auto",
+				"shell_type":       defaultBashSessionShellType(),
+				"max_output_bytes": DefaultBashSessionMaxOutputBytes,
+			},
 		},
 		{
 			Name:        "spawn_agent",

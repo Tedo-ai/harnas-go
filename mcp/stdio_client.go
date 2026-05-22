@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	harnas "github.com/Tedo-ai/harnas-go"
@@ -111,10 +110,7 @@ func (c *StdioClient) Close() error {
 	if c.cmd == nil || c.cmd.Process == nil {
 		return nil
 	}
-	pgid, err := syscall.Getpgid(c.cmd.Process.Pid)
-	if err == nil {
-		_ = syscall.Kill(-pgid, syscall.SIGTERM)
-	}
+	_ = terminateStdioProcess(c.cmd, false)
 	done := make(chan struct{})
 	go func() {
 		_ = c.cmd.Wait()
@@ -123,11 +119,7 @@ func (c *StdioClient) Close() error {
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		if err == nil {
-			_ = syscall.Kill(-pgid, syscall.SIGKILL)
-		} else {
-			_ = c.cmd.Process.Kill()
-		}
+		_ = terminateStdioProcess(c.cmd, true)
 	}
 	return nil
 }
@@ -149,7 +141,7 @@ func (c *StdioClient) listTools(ctx context.Context) ([]map[string]any, error) {
 
 func (c *StdioClient) spawn() error {
 	c.cmd = exec.Command(c.command, c.args...)
-	c.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureStdioCommand(c.cmd)
 	c.cmd.Env = os.Environ()
 	for key, value := range c.env {
 		c.cmd.Env = append(c.cmd.Env, key+"="+value)

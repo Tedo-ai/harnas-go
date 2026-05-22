@@ -6,7 +6,12 @@ on:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    name: test (${{ matrix.os }}, go ${{ matrix.go-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go-version: ["1.22", "1.23"]
 
     steps:
       - uses: actions/checkout@v5
@@ -17,12 +22,27 @@ jobs:
           path: harnas-spec
       - uses: actions/setup-go@v6
         with:
-          go-version-file: go.mod
+          go-version: ${{ matrix.go-version }}
           cache: true
       - run: test -z "$(gofmt -l .)"
       - run: test "$(shasum mcp/testdata/mcp-content-samples.json | awk '{print $1}')" = "f0233845586eba3086e9233c146b76f950df244f"
       - run: go test ./...
       - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" bin/conformance
+
+  windows-compile-check:
+    name: compile-check (windows-latest, go ${{ matrix.go-version }})
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        go-version: ["1.22", "1.23"]
+
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: ${{ matrix.go-version }}
+          cache: true
+      - run: go test ./... -run TestDoesNotExist
 
   packed-conformance:
     runs-on: ubuntu-latest

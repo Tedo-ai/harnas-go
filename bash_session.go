@@ -12,7 +12,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
@@ -107,12 +106,13 @@ func (r *BashSessionRegistry) session(id string, config map[string]any, create b
 }
 
 type bashSession struct {
-	id     string
-	shell  string
-	cmd    *exec.Cmd
-	stdin  io.WriteCloser
-	stdout *ringBuffer
-	stderr *ringBuffer
+	id        string
+	shell     string
+	shellType string
+	cmd       *exec.Cmd
+	stdin     io.WriteCloser
+	stdout    *ringBuffer
+	stderr    *ringBuffer
 
 	mu      sync.Mutex
 	current *bashCommand
@@ -141,13 +141,7 @@ type bashSessionResult struct {
 }
 
 func startBashSession(id string, config map[string]any) (*bashSession, error) {
-	shell := stringValue(config["shell"])
-	if shell == "" {
-		shell = "bash"
-	}
-	if _, err := exec.LookPath(shell); err != nil && shell == "bash" {
-		shell = "sh"
-	}
+	shell, shellType := resolveBashSessionShell(config)
 	maxBytes := intValue(config["max_output_bytes"])
 	if maxBytes <= 0 {
 		maxBytes = DefaultBashSessionMaxOutputBytes
@@ -164,7 +158,7 @@ func startBashSession(id string, config map[string]any) (*bashSession, error) {
 	cmd := exec.Command(shell)
 	cmd.Dir = absCWD
 	cmd.Stdin = nil
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	configureBashSessionCommand(cmd)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		return nil, err
@@ -179,12 +173,13 @@ func startBashSession(id string, config map[string]any) (*bashSession, error) {
 	}
 
 	session := &bashSession{
-		id:     id,
-		shell:  shell,
-		cmd:    cmd,
-		stdin:  stdin,
-		stdout: newRingBuffer(maxBytes),
-		stderr: newRingBuffer(maxBytes),
+		id:        id,
+		shell:     shell,
+		shellType: shellType,
+		cmd:       cmd,
+		stdin:     stdin,
+		stdout:    newRingBuffer(maxBytes),
+		stderr:    newRingBuffer(maxBytes),
 	}
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -193,6 +188,19 @@ func startBashSession(id string, config map[string]any) (*bashSession, error) {
 	go session.readStderr(stderrPipe)
 	go session.waitShell()
 	return session, nil
+}
+
+func effectiveBashSessionConfig(config map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, value := range config {
+		out[key] = value
+	}
+	_, shellType := resolveBashSessionShell(out)
+	out["shell_type"] = shellType
+	if stringValue(out["shell"]) == "" {
+		out["shell"] = "auto"
+	}
+	return out
 }
 
 func (s *bashSession) run(command string, commandEnv map[string]string, timeout time.Duration) bashSessionResult {
@@ -217,9 +225,9 @@ func (s *bashSession) run(command string, commandEnv map[string]string, timeout 
 	s.current = run
 	executable := command
 	if len(commandEnv) > 0 {
-		executable = wrapCommandEnv(s.shell, command, commandEnv)
+		executable = wrapCommandEnv(s.shell, s.shellType, command, commandEnv)
 	}
-	framed := fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '__HARNAS_ERR_DONE_%s\\n' >&2; printf '__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", executable, run.token, run.token)
+	framed := frameCommand(executable, run.token, s.shellType)
 	if _, err := io.WriteString(s.stdin, framed); err != nil {
 		s.current = nil
 		close(run.done)
@@ -264,12 +272,29 @@ func parseCommandEnv(value any) (map[string]string, error) {
 	return out, nil
 }
 
-func wrapCommandEnv(shell, command string, env map[string]string) string {
+func wrapCommandEnv(shell, shellType, command string, env map[string]string) string {
 	keys := make([]string, 0, len(env))
 	for key := range env {
 		keys = append(keys, key)
 	}
 	sort.Strings(keys)
+	if shellType == "powershell" {
+		assignments := make([]string, 0, len(keys))
+		restores := make([]string, 0, len(keys))
+		for _, key := range keys {
+			assignments = append(assignments, fmt.Sprintf("$__harnas_old_%s=$env:%s; $env:%s=%s", key, key, key, powershellQuote(env[key])))
+			restores = append(restores, fmt.Sprintf("$env:%s=$__harnas_old_%s", key, key))
+		}
+		return strings.Join(assignments, "; ") + "; try { " + command + " } finally { " + strings.Join(restores, "; ") + " }"
+	}
+	if shellType == "cmd" {
+		parts := []string{"setlocal"}
+		for _, key := range keys {
+			parts = append(parts, fmt.Sprintf("set %q", key+"="+env[key]))
+		}
+		parts = append(parts, command, "endlocal")
+		return strings.Join(parts, " & ")
+	}
 	parts := []string{"env"}
 	for _, key := range keys {
 		parts = append(parts, key+"="+shellQuote(env[key]))
@@ -278,8 +303,23 @@ func wrapCommandEnv(shell, command string, env map[string]string) string {
 	return strings.Join(parts, " ")
 }
 
+func frameCommand(command, token, shellType string) string {
+	switch shellType {
+	case "powershell":
+		return fmt.Sprintf("\n& { %s }; $__harnas_status=$LASTEXITCODE; if ($null -eq $__harnas_status) { $__harnas_status=0 }; [Console]::Error.WriteLine('__HARNAS_ERR_DONE_%s'); [Console]::Out.WriteLine('__HARNAS_DONE_%s:' + $__harnas_status)\n", command, token, token)
+	case "cmd":
+		return fmt.Sprintf("\r\n%s\r\nset __harnas_status=%%ERRORLEVEL%%\r\necho __HARNAS_ERR_DONE_%s 1>&2\r\necho __HARNAS_DONE_%s:%%__harnas_status%%\r\n", command, token, token)
+	default:
+		return fmt.Sprintf("\n{ %s\n} </dev/null; __harnas_status=$?; printf '__HARNAS_ERR_DONE_%s\\n' >&2; printf '__HARNAS_DONE_%s:%%s\\n' \"$__harnas_status\"\n", command, token, token)
+	}
+}
+
 func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", "'\"'\"'") + "'"
+}
+
+func powershellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
 }
 
 func (s *bashSession) status() bashSessionResult {
@@ -300,13 +340,13 @@ func (s *bashSession) kill() bashSessionResult {
 	if s.current == nil {
 		return s.snapshot("completed", nil, nil)
 	}
-	_ = s.killProcessGroup(syscall.SIGTERM)
+	_ = s.terminateProcess(false)
 	current := s.current
 	s.mu.Unlock()
 	select {
 	case <-current.done:
 	case <-time.After(3 * time.Second):
-		_ = s.killProcessGroup(syscall.SIGKILL)
+		_ = s.terminateProcess(true)
 		<-current.done
 	}
 	s.mu.Lock()
@@ -318,19 +358,8 @@ func (s *bashSession) close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.closed = true
-	_ = s.killProcessGroup(syscall.SIGKILL)
+	_ = s.terminateProcess(true)
 	return nil
-}
-
-func (s *bashSession) killProcessGroup(signal syscall.Signal) error {
-	if s.cmd.Process == nil {
-		return nil
-	}
-	pgid, err := syscall.Getpgid(s.cmd.Process.Pid)
-	if err != nil {
-		return err
-	}
-	return syscall.Kill(-pgid, signal)
 }
 
 func (s *bashSession) snapshot(status string, exitCode *int, command *bashCommand) bashSessionResult {
@@ -386,6 +415,9 @@ func (s *bashSession) handleSentinel(line string) (string, bool) {
 	if len(parts) != 2 {
 		return "", false
 	}
+	if before != "" {
+		s.stdout.WriteString(stripANSI(before))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil || s.current.token != parts[0] {
@@ -396,7 +428,7 @@ func (s *bashSession) handleSentinel(line string) (string, bool) {
 	}
 	s.current.stdoutDone = true
 	s.completeCurrentIfReadyLocked()
-	return before, true
+	return "", true
 }
 
 func (s *bashSession) readStderr(reader io.Reader) {
@@ -429,6 +461,9 @@ func (s *bashSession) handleStderrSentinel(line string) (string, bool) {
 	}
 	before := line[:index]
 	token := strings.TrimSpace(strings.TrimPrefix(line[index:], prefix))
+	if before != "" {
+		s.stderr.WriteString(stripANSI(before))
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.current == nil || s.current.token != token {
@@ -436,7 +471,7 @@ func (s *bashSession) handleStderrSentinel(line string) (string, bool) {
 	}
 	s.current.stderrDone = true
 	s.completeCurrentIfReadyLocked()
-	return before, true
+	return "", true
 }
 
 func (s *bashSession) completeCurrentIfReadyLocked() {
