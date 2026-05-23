@@ -129,7 +129,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 	})
 	if l.StreamProvider != nil {
 		err := l.StreamProvider.Call(request, func(event EventArgs) {
-			l.handleStreamEvent(event)
+			l.handleStreamEventWithIdentity(event, streamProviderName(l.StreamProvider), stringValue(request["model"]))
 		})
 		if err != nil {
 			l.Session.Observation.Emit("provider_failed", map[string]any{
@@ -174,13 +174,38 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 			return err
 		}
 		for _, event := range events {
+			if event.Type == EventAssistantMessage {
+				event.Payload = normalizeAssistantPayload(event.Payload, stringValue(event.Payload["provider"]), stringValue(firstNonEmptyAny(event.Payload["model"], request["model"])))
+			}
 			l.Session.Log.Append(event.Type, event.Payload)
 		}
 	}
 	return nil
 }
 
+func streamProviderName(provider StreamProvider) string {
+	if provider == nil {
+		return "unknown"
+	}
+	switch provider.(type) {
+	case AnthropicStreamProvider, *AnthropicStreamProvider:
+		return "anthropic"
+	case OpenAIStreamProvider, *OpenAIStreamProvider:
+		return "openai"
+	case GeminiStreamProvider, *GeminiStreamProvider:
+		return "gemini"
+	case OllamaStreamProvider, *OllamaStreamProvider:
+		return "ollama"
+	default:
+		return "unknown"
+	}
+}
+
 func (l AgentLoop) handleStreamEvent(args EventArgs) {
+	l.handleStreamEventWithIdentity(args, "", "")
+}
+
+func (l AgentLoop) handleStreamEventWithIdentity(args EventArgs, provider, model string) {
 	if isStreamObservationEvent(args.Type) {
 		event := Event{Seq: -1, ID: "stream", Type: args.Type, Payload: args.Payload}
 		l.Session.Observation.Emit("stream_event", map[string]any{"event": event})
@@ -188,6 +213,9 @@ func (l AgentLoop) handleStreamEvent(args EventArgs) {
 			l.OnStreamEvent(event)
 		}
 		return
+	}
+	if args.Type == EventAssistantMessage {
+		args.Payload = normalizeAssistantPayload(args.Payload, stringValue(firstNonEmptyAny(args.Payload["provider"], provider)), stringValue(firstNonEmptyAny(args.Payload["model"], model)))
 	}
 	l.Session.Log.Append(args.Type, args.Payload)
 }
@@ -288,8 +316,9 @@ func (l AgentLoop) dispatchPendingTools() []Event {
 				"output":      nil,
 				"error":       "denied by hook: " + reason,
 				"approval": map[string]any{
-					"decision": "rejected",
-					"reason":   reason,
+					"decision":     "rejected",
+					"rule_matched": reason,
+					"applied_diff": nil,
 				},
 			})
 		} else {

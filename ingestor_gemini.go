@@ -46,6 +46,8 @@ func (g *GeminiIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 		"text":        text,
 		"stop_reason": normalizeGeminiStop(candidate["finishReason"], len(events) > 0),
 		"usage":       normalizeGeminiUsage(response["usageMetadata"]),
+		"provider":    "gemini",
+		"model":       stringValue(firstNonEmptyAny(response["modelVersion"], response["model"])),
 	}
 	if len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
@@ -69,9 +71,5 @@ func normalizeGeminiStop(value any, hasToolUse bool) string {
 }
 
 func normalizeGeminiUsage(value any) map[string]any {
-	usage := asMap(value)
-	return map[string]any{
-		"input_tokens":  usage["promptTokenCount"],
-		"output_tokens": usage["candidatesTokenCount"],
-	}
+	return NormalizeUsage(value)
 }

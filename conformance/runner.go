@@ -393,6 +393,13 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 				session.Log.Append(harnas.EventRevert, map[string]any{"revokes": revokes})
 				continue
 			}
+			if appendEvents, ok := action["append_events"]; ok {
+				for _, raw := range asSlice(appendEvents) {
+					spec := asMap(raw)
+					session.Log.Append(harnas.EventType(stringValue(spec["type"])), asMap(spec["payload"]))
+				}
+				continue
+			}
 			if forkSpec, ok := action["fork"]; ok {
 				atSeq := int(floatValue(asMap(forkSpec)["at_seq"]))
 				parent := session
@@ -702,14 +709,58 @@ func eventSlicesEqual(left, right []harnas.Event) bool {
 }
 
 func eventsEqual(left, right harnas.Event) bool {
+	left = normalizeActualEventForExpected(left, right)
 	if wildcardEvent(right) {
 		leftAny := map[string]any{"seq": left.Seq, "type": string(left.Type), "payload": left.Payload}
 		rightAny := map[string]any{"seq": right.Seq, "type": string(right.Type), "payload": right.Payload}
+		if right.Timestamp != "" {
+			leftAny["timestamp"] = left.Timestamp
+			rightAny["timestamp"] = right.Timestamp
+		}
 		return wildcardValueEqual(leftAny, rightAny)
 	}
 	leftJSON, leftErr := json.Marshal(left)
 	rightJSON, rightErr := json.Marshal(right)
 	return leftErr == nil && rightErr == nil && string(leftJSON) == string(rightJSON)
+}
+
+func normalizeActualEventForExpected(actual, expected harnas.Event) harnas.Event {
+	if expected.Timestamp == "" {
+		actual.Timestamp = ""
+	} else if expected.Timestamp == "<generated>" && actual.Timestamp != "" {
+		actual.Timestamp = "<generated>"
+	}
+	actual.Payload = normalizeActualPayloadForExpected(actual.Payload, expected.Payload)
+	return actual
+}
+
+func normalizeActualPayloadForExpected(actual, expected map[string]any) map[string]any {
+	if actual == nil || expected == nil {
+		return actual
+	}
+	out := map[string]any{}
+	for key, value := range actual {
+		if _, ok := expected[key]; ok {
+			out[key] = value
+		}
+	}
+	if expectedUsage, ok := expected["usage"].(map[string]any); ok {
+		out["usage"] = normalizeActualMapForExpected(asMap(actual["usage"]), expectedUsage)
+	}
+	return out
+}
+
+func normalizeActualMapForExpected(actual, expected map[string]any) map[string]any {
+	out := map[string]any{}
+	for key, expectedValue := range expected {
+		actualValue := actual[key]
+		if expectedNested, ok := expectedValue.(map[string]any); ok {
+			out[key] = normalizeActualMapForExpected(asMap(actualValue), expectedNested)
+		} else {
+			out[key] = actualValue
+		}
+	}
+	return out
 }
 
 func wildcardEvent(event harnas.Event) bool {

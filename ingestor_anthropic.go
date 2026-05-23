@@ -41,7 +41,9 @@ func (AnthropicIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 	payload := map[string]any{
 		"text":        text,
 		"stop_reason": stopReason,
-		"usage":       normalizeUsage(response["usage"]),
+		"usage":       NormalizeUsage(response["usage"]),
+		"provider":    "anthropic",
+		"model":       stringValue(response["model"]),
 	}
 	if len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
@@ -60,15 +62,4 @@ func asSlice(value any) []any {
 		return items
 	}
 	return nil
-}
-
-func normalizeUsage(value any) map[string]any {
-	usage, ok := value.(map[string]any)
-	if !ok {
-		return map[string]any{"input_tokens": 0, "output_tokens": 0}
-	}
-	return map[string]any{
-		"input_tokens":  usage["input_tokens"],
-		"output_tokens": usage["output_tokens"],
-	}
 }

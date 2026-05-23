@@ -67,6 +67,13 @@ func asMap(value any) map[string]any {
 	return map[string]any{}
 }
 
+func asSlice(value any) []any {
+	if typed, ok := value.([]any); ok {
+		return typed
+	}
+	return nil
+}
+
 func stringValue(value any) string {
 	if typed, ok := value.(string); ok {
 		return typed

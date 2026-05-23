@@ -105,10 +105,11 @@ func (s *Session) Save(path string) error {
 			id = eventID(event.Seq, event.Payload)
 		}
 		if err := encoder.Encode(map[string]any{
-			"seq":     event.Seq,
-			"id":      id,
-			"type":    event.Type,
-			"payload": event.Payload,
+			"seq":       event.Seq,
+			"id":        id,
+			"timestamp": event.Timestamp,
+			"type":      event.Type,
+			"payload":   event.Payload,
 		}); err != nil {
 			return err
 		}
@@ -145,15 +146,16 @@ func LoadSession(path string) (*Session, error) {
 	log := NewLog()
 	for _, line := range lines[1:] {
 		var row struct {
-			Seq     int            `json:"seq"`
-			ID      string         `json:"id"`
-			Type    EventType      `json:"type"`
-			Payload map[string]any `json:"payload"`
+			Seq       int            `json:"seq"`
+			ID        string         `json:"id"`
+			Timestamp string         `json:"timestamp"`
+			Type      EventType      `json:"type"`
+			Payload   map[string]any `json:"payload"`
 		}
 		if err := json.Unmarshal(line, &row); err != nil {
 			return nil, err
 		}
-		log.Restore(Event{ID: row.ID, Seq: row.Seq, Type: row.Type, Payload: row.Payload})
+		log.Restore(Event{ID: row.ID, Seq: row.Seq, Timestamp: row.Timestamp, Type: row.Type, Payload: row.Payload})
 	}
 	session := NewSession(header.ID, log, header.Metadata)
 	session.ParentSessionID = header.ParentSessionID

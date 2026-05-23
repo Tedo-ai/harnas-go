@@ -13,6 +13,8 @@ func (OpenAIIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 		"text":        text,
 		"stop_reason": stopReason,
 		"usage":       normalizeOpenAIUsage(response["usage"]),
+		"provider":    "openai",
+		"model":       stringValue(response["model"]),
 	}
 	if reasoning := openAIReasoningBlocks(message); len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
@@ -73,9 +75,5 @@ func normalizeOpenAIStop(value any) string {
 }
 
 func normalizeOpenAIUsage(value any) map[string]any {
-	usage := asMap(value)
-	return map[string]any{
-		"input_tokens":  usage["prompt_tokens"],
-		"output_tokens": usage["completion_tokens"],
-	}
+	return NormalizeUsage(value)
 }
