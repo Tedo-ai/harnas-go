@@ -2,6 +2,15 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.19.1] — 2026-05-31
+
+### Changed
+
+- Lockstep spec patch release. Validated against fixtures version
+  `0.19.1`: 66/66.
+- Confirmed Anthropic projections preserve assistant text alongside
+  co-occurring reasoning blocks on later turns.
+
 ## [0.19.0] — 2026-05-24
 
 ### Added
@@ -417,6 +426,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.19.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.1
 [0.19.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.0
 [0.18.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.2
 [0.18.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.1
