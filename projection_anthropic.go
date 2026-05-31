@@ -389,6 +389,12 @@ type GeminiProjection struct {
 
 func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
 	contents := []map[string]any{}
+	toolUseNames := map[string]string{}
+	for _, event := range ApplyMutations(log) {
+		if event.Type == EventToolUse {
+			toolUseNames[stringValue(event.Payload["id"])] = stringValue(event.Payload["name"])
+		}
+	}
 	for _, event := range ApplyMutations(log) {
 		switch event.Type {
 		case EventUserMessage, EventSummary:
@@ -411,6 +417,43 @@ func (p GeminiProjection) Project(log *Log) (map[string]any, error) {
 					"parts": parts,
 				})
 			}
+		case EventToolUse:
+			part := map[string]any{
+				"functionCall": map[string]any{
+					"name": event.Payload["name"],
+					"args": asMap(event.Payload["arguments"]),
+				},
+			}
+			if len(contents) > 0 && contents[len(contents)-1]["role"] == "model" {
+				last := contents[len(contents)-1]
+				last["parts"] = append(asMapSlice(last["parts"]), part)
+			} else {
+				contents = append(contents, map[string]any{
+					"role":  "model",
+					"parts": []map[string]any{part},
+				})
+			}
+		case EventToolResult:
+			response := map[string]any{}
+			if errText := stringValue(event.Payload["error"]); errText != "" {
+				response["error"] = errText
+			} else {
+				response["content"] = stringValue(event.Payload["output"])
+			}
+			toolUseID := stringValue(event.Payload["tool_use_id"])
+			wireName := toolUseNames[toolUseID]
+			if wireName == "" {
+				wireName = toolUseID
+			}
+			contents = append(contents, map[string]any{
+				"role": "user",
+				"parts": []map[string]any{{
+					"functionResponse": map[string]any{
+						"name":     wireName,
+						"response": response,
+					},
+				}},
+			})
 		}
 	}
 	request := map[string]any{

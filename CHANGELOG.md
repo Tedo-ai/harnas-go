@@ -2,6 +2,18 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.19.2] — 2026-06-01
+
+### Changed
+
+- Lockstep spec patch release. Validated against fixtures version
+  `0.19.2`: 69/69.
+- Confirmed projections preserve assistant text alongside co-occurring
+  tool calls for Anthropic, OpenAI, and Gemini.
+- Fixed Gemini projection replay so prior tool calls are projected as
+  `functionCall` parts and tool results as `functionResponse` parts on
+  later provider turns.
+
 ## [0.19.1] — 2026-05-31
 
 ### Changed
@@ -428,6 +440,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.19.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.2
 [0.19.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.1
 [0.19.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.0
 [0.18.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.18.2
