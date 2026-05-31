@@ -2,6 +2,16 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [0.19.3] — 2026-06-01
+
+### Changed
+
+- Lockstep spec patch release. Validated against fixtures version
+  `0.19.3`: 70/70.
+- Conformance runner now honors `isolation.json` repeat checks so a
+  fixture can assert that multiple Sessions run in one process without
+  leaking mutable state.
+
 ## [0.19.2] — 2026-06-01
 
 ### Changed
@@ -440,6 +450,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.19.3]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.3
 [0.19.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.2
 [0.19.1]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.1
 [0.19.0]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.0

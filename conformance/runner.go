@@ -108,6 +108,12 @@ func Run(fixtureDir string) (Result, error) {
 			return Result{}, err
 		}
 	}
+	if diff == "" && fileExists(filepath.Join(fixtureDir, "isolation.json")) {
+		diff, err = isolationRepeatDiff(fixtureDir, manifest, scriptPath, inputs, expected)
+		if err != nil {
+			return Result{}, err
+		}
+	}
 	return Result{
 		Fixture:  fixture,
 		Passed:   diff == "",
@@ -115,6 +121,30 @@ func Run(fixtureDir string) (Result, error) {
 		Expected: expected,
 		Diff:     diff,
 	}, nil
+}
+
+type isolationSpec struct {
+	Repeat int `json:"repeat"`
+}
+
+func isolationRepeatDiff(fixtureDir string, manifest harnas.Manifest, scriptPath string, inputs []any, expected []harnas.Event) (string, error) {
+	var spec isolationSpec
+	if err := readJSON(filepath.Join(fixtureDir, "isolation.json"), &spec); err != nil {
+		return "", err
+	}
+	if spec.Repeat < 2 {
+		return "", nil
+	}
+	for i := 1; i < spec.Repeat; i++ {
+		session, _, _, err := RunSessionWithSidecars(manifest, scriptPath, inputs, nil, "", "")
+		if err != nil {
+			return "", err
+		}
+		if diff := FirstDiff(session.Log.Events(), expected); diff != "" {
+			return fmt.Sprintf("isolation repeat %d mismatch: %s", i+1, diff), nil
+		}
+	}
+	return "", nil
 }
 
 type ProjectionRow struct {
