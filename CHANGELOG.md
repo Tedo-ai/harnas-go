@@ -10,6 +10,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
   `0.19.1`: 66/66.
 - Confirmed Anthropic projections preserve assistant text alongside
   co-occurring reasoning blocks on later turns.
+- Updated GitHub Actions to test with Go 1.25, matching the module's
+  declared Go version.
 
 ## [0.19.0] — 2026-05-24
 
