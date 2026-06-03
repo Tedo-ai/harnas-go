@@ -144,7 +144,7 @@ func LoadSession(path string) (*Session, error) {
 	}
 
 	log := NewLog()
-	for _, line := range lines[1:] {
+	for index, line := range lines[1:] {
 		var row struct {
 			Seq       int            `json:"seq"`
 			ID        string         `json:"id"`
@@ -154,6 +154,9 @@ func LoadSession(path string) (*Session, error) {
 		}
 		if err := json.Unmarshal(line, &row); err != nil {
 			return nil, err
+		}
+		if row.Seq != index {
+			return nil, fmt.Errorf("invalid event seq at row %d: got %d, want %d", index+1, row.Seq, index)
 		}
 		log.Restore(Event{ID: row.ID, Seq: row.Seq, Timestamp: row.Timestamp, Type: row.Type, Payload: row.Payload})
 	}
