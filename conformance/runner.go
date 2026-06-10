@@ -396,7 +396,7 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 		loop.Runner = &harnas.Runner{Registry: registry}
 	}
 	if streaming {
-		var streams [][]map[string]any
+		var streams []any
 		if err := readJSON(scriptPath, &streams); err != nil {
 			return nil, nil, nil, err
 		}

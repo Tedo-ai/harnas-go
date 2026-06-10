@@ -37,20 +37,29 @@ type ScriptedProvider struct {
 }
 
 type ScriptedStreamProvider struct {
-	streams [][]map[string]any
+	streams []any
 }
 
-func NewScriptedStreamProvider(streams [][]map[string]any) *ScriptedStreamProvider {
-	return &ScriptedStreamProvider{streams: append([][]map[string]any(nil), streams...)}
+func NewScriptedStreamProvider(streams []any) *ScriptedStreamProvider {
+	return &ScriptedStreamProvider{streams: append([]any(nil), streams...)}
 }
 
-func (p *ScriptedStreamProvider) Call(_ map[string]any, emit func(harnas.EventArgs)) error {
+func (p *ScriptedStreamProvider) Call(request map[string]any, emit func(harnas.EventArgs)) error {
 	if len(p.streams) == 0 {
 		return fmt.Errorf("scripted stream provider exhausted")
 	}
 	stream := p.streams[0]
 	p.streams = p.streams[1:]
-	for _, event := range stream {
+	if entry, ok := stream.(map[string]any); ok {
+		if expected, ok := entry["expect_request"]; ok {
+			actual := normalizeValue(request)
+			if !reflect.DeepEqual(actual, normalizeValue(expected)) {
+				return fmt.Errorf("request does not match expected: %#v != %#v", actual, normalizeValue(expected))
+			}
+			stream = entry["response"]
+		}
+	}
+	for _, event := range streamEvents(stream) {
 		if errorSpec, ok := event["error"].(map[string]any); ok {
 			emit(harnas.EventArgs{
 				Type: harnas.EventAssistantTurnFailed,
@@ -81,6 +90,18 @@ func (p *ScriptedStreamProvider) Call(_ map[string]any, emit func(harnas.EventAr
 		})
 	}
 	return nil
+}
+
+func streamEvents(value any) []map[string]any {
+	items, ok := value.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(items))
+	for _, item := range items {
+		out = append(out, asMap(item))
+	}
+	return out
 }
 
 func asMap(value any) map[string]any {
