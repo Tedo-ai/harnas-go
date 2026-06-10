@@ -1,8 +1,10 @@
 package harnas
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 type AnthropicProjection struct {
@@ -353,11 +355,14 @@ func openAIContentForAssistant(content any) any {
 }
 
 func mustJSON(value any) string {
-	data, err := json.Marshal(value)
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	err := encoder.Encode(value)
 	if err != nil {
 		return "{}"
 	}
-	return string(data)
+	return strings.TrimSuffix(buf.String(), "\n")
 }
 
 func asMapSlice(value any) []map[string]any {

@@ -2,7 +2,6 @@ package conformance
 
 import (
 	"fmt"
-	"reflect"
 
 	harnas "github.com/Tedo-ai/harnas-go"
 )
@@ -53,7 +52,8 @@ func (p *ScriptedStreamProvider) Call(request map[string]any, emit func(harnas.E
 	if entry, ok := stream.(map[string]any); ok {
 		if expected, ok := entry["expect_request"]; ok {
 			actual := normalizeValue(request)
-			if !reflect.DeepEqual(actual, normalizeValue(expected)) {
+			normalizedExpected := normalizeValue(expected)
+			if !requestValueEqual(actual, normalizedExpected) {
 				return fmt.Errorf("request does not match expected: %#v != %#v", actual, normalizeValue(expected))
 			}
 			stream = entry["response"]
@@ -145,7 +145,7 @@ func (p *ScriptedProvider) Call(request map[string]any) (map[string]any, error) 
 	if _, ok := response["expect_request"]; ok {
 		expected := normalizeValue(response["expect_request"])
 		actual := normalizeValue(request)
-		if !reflect.DeepEqual(actual, expected) {
+		if !requestValueEqual(actual, expected) {
 			return nil, fmt.Errorf("request does not match expected: %#v != %#v", actual, expected)
 		}
 		response = asMap(response["response"])
@@ -157,6 +157,39 @@ func (p *ScriptedProvider) Call(request map[string]any) (map[string]any, error) 
 		}
 	}
 	return response, nil
+}
+
+func requestValueEqual(actual, expected any) bool {
+	if expected == "<generated>" {
+		return actual != nil && actual != ""
+	}
+	actualMap, actualMapOK := actual.(map[string]any)
+	expectedMap, expectedMapOK := expected.(map[string]any)
+	if actualMapOK && expectedMapOK {
+		if len(actualMap) != len(expectedMap) {
+			return false
+		}
+		for key, expectedValue := range expectedMap {
+			if !requestValueEqual(actualMap[key], expectedValue) {
+				return false
+			}
+		}
+		return true
+	}
+	actualSlice, actualSliceOK := actual.([]any)
+	expectedSlice, expectedSliceOK := expected.([]any)
+	if actualSliceOK && expectedSliceOK {
+		if len(actualSlice) != len(expectedSlice) {
+			return false
+		}
+		for i := range actualSlice {
+			if !requestValueEqual(actualSlice[i], expectedSlice[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	return actual == expected
 }
 
 func normalizeValue(value any) any {
