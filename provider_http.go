@@ -2,11 +2,13 @@ package harnas
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
 )
 
 const (
@@ -17,6 +19,8 @@ const (
 	GeminiEndpointBase    = "https://generativelanguage.googleapis.com/v1beta/models"
 	GeminiGenerateContent = "generateContent"
 )
+
+var DefaultProviderHTTPTimeout = 60 * time.Second
 
 type HTTPDoer interface {
 	Do(*http.Request) (*http.Response, error)
@@ -146,14 +150,14 @@ func (p AnthropicProvider) client() HTTPDoer {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: DefaultProviderHTTPTimeout}
 }
 
 func (p OpenAIProvider) client() HTTPDoer {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: DefaultProviderHTTPTimeout}
 }
 
 func ollamaChatEndpoint(baseURL string) string {
@@ -171,7 +175,7 @@ func (p GeminiProvider) client() HTTPDoer {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: DefaultProviderHTTPTimeout}
 }
 
 func postJSON(client HTTPDoer, endpoint string, headers map[string]string, body map[string]any) (map[string]any, error) {
@@ -179,7 +183,9 @@ func postJSON(client HTTPDoer, endpoint string, headers map[string]string, body 
 	if err != nil {
 		return nil, err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultProviderHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return nil, err
 	}

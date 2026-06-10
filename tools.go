@@ -164,11 +164,10 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 		return
 	}
 
-	encoded, _ := json.Marshal(args)
 	log.Append(EventToolResult, map[string]any{
 		"tool_use_id": id,
-		"output":      fmt.Sprintf("[conformance stub: %s(%s)]", tool.Handler, string(encoded)),
-		"error":       nil,
+		"output":      nil,
+		"error":       fmt.Sprintf("unresolved tool handler: %s", tool.Handler),
 	})
 }
 

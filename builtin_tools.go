@@ -21,6 +21,8 @@ const (
 	MaxFetchBytes              = 256 * 1024
 )
 
+var DefaultFetchURLTimeout = 60 * time.Second
+
 func BuiltinHandlers() map[string]ToolHandler {
 	return map[string]ToolHandler{
 		"harnas.builtin.read_file":  BuiltinReadFile,
@@ -446,7 +448,8 @@ func BuiltinFetchURL(args map[string]any) (string, error) {
 	for key, value := range asMap(args["headers"]) {
 		request.Header.Set(key, stringValue(value))
 	}
-	response, err := http.DefaultClient.Do(request)
+	client := &http.Client{Timeout: DefaultFetchURLTimeout}
+	response, err := client.Do(request)
 	if err != nil {
 		return "", err
 	}
@@ -515,6 +518,7 @@ func glob(pattern string) ([]string, error) {
 		root = "."
 	}
 	suffix := strings.TrimPrefix(rest, string(os.PathSeparator))
+	suffix = filepath.ToSlash(suffix)
 	matches := []string{}
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
@@ -524,7 +528,11 @@ func glob(pattern string) ([]string, error) {
 		if err != nil {
 			return nil
 		}
+		rel = filepath.ToSlash(rel)
 		ok, err := filepath.Match(suffix, rel)
+		if err == nil && !ok && !strings.Contains(suffix, "/") {
+			ok, err = filepath.Match(suffix, filepath.Base(rel))
+		}
 		if err == nil && ok {
 			matches = append(matches, path)
 		}

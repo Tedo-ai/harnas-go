@@ -3,6 +3,7 @@ package harnas
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -119,21 +120,21 @@ func (p AnthropicStreamProvider) client() HTTPDoer {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: DefaultProviderHTTPTimeout}
 }
 
 func (p OpenAIStreamProvider) client() HTTPDoer {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: DefaultProviderHTTPTimeout}
 }
 
 func (p GeminiStreamProvider) client() HTTPDoer {
 	if p.Client != nil {
 		return p.Client
 	}
-	return http.DefaultClient
+	return &http.Client{Timeout: DefaultProviderHTTPTimeout}
 }
 
 type sseHandler interface {
@@ -148,7 +149,9 @@ func streamSSE(client HTTPDoer, endpoint string, headers map[string]string, body
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPost, endpoint, bytes.NewReader(payload))
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultProviderHTTPTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
@@ -288,6 +291,9 @@ func (s *anthropicStreamState) Data(data string) error {
 		return nil
 	}
 	switch payload["type"] {
+	case "message_start":
+		usage := asMap(asMap(payload["message"])["usage"])
+		s.mergeUsage(usage)
 	case "content_block_start":
 		cb := asMap(payload["content_block"])
 		if cb["type"] == "tool_use" {
@@ -332,12 +338,21 @@ func (s *anthropicStreamState) Data(data string) error {
 		if stop := stringValue(delta["stop_reason"]); stop != "" {
 			s.stop = anthropicStopReason(stop)
 		}
-		if usage := asMap(payload["usage"]); len(usage) > 0 {
-			s.usage["input_tokens"] = usage["input_tokens"]
-			s.usage["output_tokens"] = usage["output_tokens"]
-		}
+		s.mergeUsage(asMap(payload["usage"]))
 	}
 	return nil
+}
+
+func (s *anthropicStreamState) mergeUsage(usage map[string]any) {
+	if len(usage) == 0 {
+		return
+	}
+	if input, ok := usage["input_tokens"]; ok {
+		s.usage["input_tokens"] = input
+	}
+	if output, ok := usage["output_tokens"]; ok {
+		s.usage["output_tokens"] = output
+	}
 }
 
 func (s *anthropicStreamState) Complete() {

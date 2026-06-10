@@ -366,6 +366,12 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 			registered.CallConfig = handler
 		} else if handler := builtinHandlers[tool.Handler]; handler != nil {
 			registered.Call = handler
+		} else if strings.HasPrefix(tool.Handler, "conformance.") {
+			handlerName := tool.Handler
+			registered.Call = func(args map[string]any) (string, error) {
+				encoded, _ := json.Marshal(args)
+				return "[conformance stub: " + handlerName + "(" + string(encoded) + ")]", nil
+			}
 		}
 		registry.Register(registered)
 	}
