@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import os
 import sys
+import hashlib
+import json
 from pathlib import Path
 
 
@@ -41,6 +43,48 @@ def fixture_count(root: Path) -> int:
     return sum(1 for path in agents.iterdir() if path.is_dir() and (path / "manifest.json").exists())
 
 
+def fixture_hashes(root: Path) -> dict[str, str]:
+    agents = root / "conformance" / "agents"
+    hashes: dict[str, str] = {}
+    for path in sorted(agents.iterdir()):
+        if not path.is_dir() or not (path / "manifest.json").exists():
+            continue
+        expected_log = path / "expected-log.jsonl"
+        if not expected_log.exists():
+            fail(f"{path.relative_to(root)} has no expected-log.jsonl")
+        hashes[path.name] = hashlib.sha256(expected_log.read_bytes()).hexdigest()
+    return hashes
+
+
+def require_corpus_manifest(root: Path, fixtures_version: str) -> None:
+    manifest_path = root / "conformance" / "corpus-manifest.json"
+    if not manifest_path.exists():
+        fail("spec conformance/corpus-manifest.json is missing")
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    versions = manifest.get("versions")
+    if not isinstance(versions, dict):
+        fail("spec corpus manifest has no versions object")
+    entry = versions.get(fixtures_version)
+    if not isinstance(entry, dict):
+        fail(f"spec corpus manifest has no entry for fixtures_version {fixtures_version}")
+    expected = entry.get("agents")
+    if not isinstance(expected, dict):
+        fail(f"spec corpus manifest entry {fixtures_version} has no agents object")
+    actual = fixture_hashes(root)
+    if actual != expected:
+        missing = sorted(set(actual) - set(expected))
+        stale = sorted(set(expected) - set(actual))
+        changed = sorted(name for name in set(actual) & set(expected) if actual[name] != expected[name])
+        parts = []
+        if missing:
+            parts.append(f"new fixtures without version bump: {', '.join(missing)}")
+        if stale:
+            parts.append(f"manifest contains removed fixtures: {', '.join(stale)}")
+        if changed:
+            parts.append(f"expected-log hashes changed: {', '.join(changed)}")
+        fail("; ".join(parts) or "spec corpus manifest does not match live fixtures")
+
+
 def latest_changelog_version() -> str:
     for line in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines():
         if line.startswith("## [") and "Unreleased" not in line:
@@ -53,6 +97,7 @@ def main() -> None:
     fields = version_fields(root)
     spec_version = fields.get("harnas_version") or fail("spec VERSION has no harnas_version")
     fixtures_version = fields.get("fixtures_version") or fail("spec VERSION has no fixtures_version")
+    require_corpus_manifest(root, fixtures_version)
     impl_version = latest_changelog_version()
     count = fixture_count(root)
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
