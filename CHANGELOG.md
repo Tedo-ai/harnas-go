@@ -4,12 +4,14 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+## [0.19.5] — 2026-06-10
+
 ### Added
 
 - Added contextual tool handlers via `ToolContext` and
   `ContextualToolHandler`, exposing the current Session id, canonical
-  `tool_use.id` provenance, cancellation context, manifest config, and an
-  opaque `Extra` bag while preserving existing `ToolHandler`,
+  `tool_use.id` provenance via `SourceToolUseID`, cancellation context,
+  manifest config, and an opaque `Extra` bag while preserving existing `ToolHandler`,
   `ConfiguredToolHandler`, `ToolHandlerV2`, and `WrapV1Handler`
   compatibility.
 - Added conformance replay support for malformed streaming provider
@@ -18,6 +20,12 @@ All notable changes to the Go implementation of Harnas are recorded here.
   claims with the checked-out spec.
 - Added conformance aliases for the MarkerTail, hook, and fork canary
   fixtures. Validated against the expanded 75-fixture spec set.
+
+### Changed
+
+- This is an implementation-only patch release for AgentStaple Step 3. It
+  tracks Harnas spec and fixtures version `0.19.4`; v0.20.0 remains reserved
+  for the durability and provider-carrier work.
 
 ## [0.19.4] — 2026-06-03
 
@@ -478,6 +486,7 @@ All notable changes to the Go implementation of Harnas are recorded here.
   failures by appending `assistant_turn_failed` before raising the
   provider error.
 
+[0.19.5]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.5
 [0.19.4]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.4
 [0.19.3]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.3
 [0.19.2]: https://github.com/Tedo-ai/harnas-go/releases/tag/v0.19.2

@@ -41,16 +41,24 @@ def fixture_count(root: Path) -> int:
     return sum(1 for path in agents.iterdir() if path.is_dir() and (path / "manifest.json").exists())
 
 
+def latest_changelog_version() -> str:
+    for line in (ROOT / "CHANGELOG.md").read_text(encoding="utf-8").splitlines():
+        if line.startswith("## [") and "Unreleased" not in line:
+            return line.split("[", 1)[1].split("]", 1)[0]
+    fail("CHANGELOG has no release entries")
+
+
 def main() -> None:
     root = spec_root()
     fields = version_fields(root)
     spec_version = fields.get("harnas_version") or fail("spec VERSION has no harnas_version")
     fixtures_version = fields.get("fixtures_version") or fail("spec VERSION has no fixtures_version")
+    impl_version = latest_changelog_version()
     count = fixture_count(root)
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
 
     required = [
-        f"**Version {spec_version}**",
+        f"**Version {impl_version}**",
         f"Tracks Harnas spec {spec_version}",
         f"Agent conformance: {count}/{count} fixtures passing",
     ]
@@ -61,7 +69,7 @@ def main() -> None:
         if stale in readme:
             fail(f"README contains stale {stale}")
 
-    print(f"drift ok: harnas-go {spec_version}, fixtures v{fixtures_version}, {count} agent fixtures")
+    print(f"drift ok: harnas-go {impl_version}, spec {spec_version}, fixtures v{fixtures_version}, {count} agent fixtures")
 
 
 if __name__ == "__main__":
