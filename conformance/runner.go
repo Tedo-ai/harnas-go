@@ -760,37 +760,7 @@ func normalizeActualEventForExpected(actual, expected harnas.Event) harnas.Event
 	} else if expected.Timestamp == "<generated>" && actual.Timestamp != "" {
 		actual.Timestamp = "<generated>"
 	}
-	actual.Payload = normalizeActualPayloadForExpected(actual.Payload, expected.Payload)
 	return actual
-}
-
-func normalizeActualPayloadForExpected(actual, expected map[string]any) map[string]any {
-	if actual == nil || expected == nil {
-		return actual
-	}
-	out := map[string]any{}
-	for key, value := range actual {
-		if _, ok := expected[key]; ok {
-			out[key] = value
-		}
-	}
-	if expectedUsage, ok := expected["usage"].(map[string]any); ok {
-		out["usage"] = normalizeActualMapForExpected(asMap(actual["usage"]), expectedUsage)
-	}
-	return out
-}
-
-func normalizeActualMapForExpected(actual, expected map[string]any) map[string]any {
-	out := map[string]any{}
-	for key, expectedValue := range expected {
-		actualValue := actual[key]
-		if expectedNested, ok := expectedValue.(map[string]any); ok {
-			out[key] = normalizeActualMapForExpected(asMap(actualValue), expectedNested)
-		} else {
-			out[key] = actualValue
-		}
-	}
-	return out
 }
 
 func wildcardEvent(event harnas.Event) bool {
