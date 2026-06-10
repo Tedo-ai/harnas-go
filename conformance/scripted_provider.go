@@ -20,6 +20,18 @@ func (e ProviderHTTPError) HTTPStatus() int {
 	return e.Status
 }
 
+type ProviderMalformedFrameError struct {
+	Message string
+}
+
+func (e ProviderMalformedFrameError) Error() string {
+	return e.Message
+}
+
+func (e ProviderMalformedFrameError) ProviderErrorClass() string {
+	return "Harnas::Providers::Error"
+}
+
 type ScriptedProvider struct {
 	responses []map[string]any
 }
@@ -51,6 +63,17 @@ func (p *ScriptedStreamProvider) Call(_ map[string]any, emit func(harnas.EventAr
 				Status: int(floatValue(errorSpec["status"])),
 				Body:   stringValue(errorSpec["body"]),
 			}
+		}
+		if frameSpec, ok := event["malformed_frame"].(map[string]any); ok {
+			message := stringValue(frameSpec["message"])
+			emit(harnas.EventArgs{
+				Type: harnas.EventAssistantTurnFailed,
+				Payload: map[string]any{
+					"turn_id": stringValue(frameSpec["turn_id"]),
+					"error":   message,
+				},
+			})
+			return ProviderMalformedFrameError{Message: message}
 		}
 		emit(harnas.EventArgs{
 			Type:    harnas.EventType(stringValue(event["type"])),

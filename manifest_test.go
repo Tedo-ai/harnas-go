@@ -1,6 +1,7 @@
 package harnas
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -156,6 +157,66 @@ func TestWrapV1HandlerKeepsSingleArgumentHandlersCompatible(t *testing.T) {
 	}
 	if output != "hello" {
 		t.Fatalf("expected hello, got %q", output)
+	}
+}
+
+func TestContextualToolHandlerReceivesToolContext(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "manifest.json")
+	mustWrite(t, path, `{
+		"harnas_version":"0.1",
+		"name":"contextual-tool",
+		"provider":{"kind":"mock","max_tokens":1},
+		"tools":[{
+			"name":"echo",
+			"handler":"test.contextual",
+			"description":"Echo context.",
+			"input_schema":{"type":"object"},
+			"config":{"prefix":"ctx"}
+		}],
+		"strategies":[]
+	}`)
+
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	var seen ToolContext
+	loaded, err := LoadManifest(path, ManifestOptions{
+		ContextualHandlers: map[string]ContextualToolHandler{
+			"test.contextual": func(args map[string]any, ctx ToolContext) (string, error) {
+				seen = ctx
+				if ctx.Context.Err() == nil {
+					t.Fatalf("expected canceled context")
+				}
+				return stringValue(ctx.Config["prefix"]) + ":" + stringValue(args["text"]), nil
+			},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	event := loaded.Session.Log.Append(EventToolUse, map[string]any{
+		"id":        "toolu_ctx",
+		"name":      "echo",
+		"arguments": map[string]any{"text": "hello"},
+	})
+	runner := loaded.Runner()
+	runner.Context = cancelled
+	runner.Extra = map[string]any{"surface": "test"}
+	runner.Run(event, loaded.Session.Log)
+
+	result := loaded.Session.Log.Events()[1]
+	if result.Payload["output"] != "ctx:hello" {
+		t.Fatalf("expected contextual output, got %#v", result.Payload)
+	}
+	if seen.SessionID != loaded.Session.ID {
+		t.Fatalf("expected session id %q, got %q", loaded.Session.ID, seen.SessionID)
+	}
+	if seen.ToolUseID != "toolu_ctx" || seen.SourceToolUseID != "toolu_ctx" {
+		t.Fatalf("expected tool_use id provenance, got %#v", seen)
+	}
+	if seen.Extra["surface"] != "test" {
+		t.Fatalf("expected extra bag to pass through, got %#v", seen.Extra)
 	}
 }
 

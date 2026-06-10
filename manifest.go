@@ -80,6 +80,7 @@ func WrapV1Handler(handler ToolHandler) ToolHandlerV2 {
 type ManifestOptions struct {
 	ToolHandlers       map[string]ToolHandler
 	ConfiguredHandlers map[string]ConfiguredToolHandler
+	ContextualHandlers map[string]ContextualToolHandler
 	StrategyHandlers   map[string]ApprovalHandler
 	HookHandlers       map[string]HookHandler
 	Providers          map[string]Provider
@@ -251,10 +252,11 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 	if err := ValidateManifest(manifest); err != nil {
 		return nil, err
 	}
-	registry, err := BuildRegistryWithConfigured(
+	registry, err := BuildRegistryWithContextual(
 		manifest.Tools,
 		options.ToolHandlers,
 		options.ConfiguredHandlers,
+		options.ContextualHandlers,
 	)
 	if err != nil {
 		return nil, err
@@ -309,7 +311,7 @@ func (l *LoadedManifest) InstallStrategies() {
 }
 
 func (l *LoadedManifest) Runner() *Runner {
-	return &Runner{Registry: l.Registry}
+	return &Runner{Registry: l.Registry, ParentSession: l.Session}
 }
 
 func (l *LoadedManifest) Loop() AgentLoop {
@@ -425,6 +427,15 @@ func BuildRegistry(specs []ToolSpec, handlers map[string]ToolHandler) (*Registry
 }
 
 func BuildRegistryWithConfigured(specs []ToolSpec, handlers map[string]ToolHandler, configured map[string]ConfiguredToolHandler) (*Registry, error) {
+	return BuildRegistryWithContextual(specs, handlers, configured, nil)
+}
+
+func BuildRegistryWithContextual(
+	specs []ToolSpec,
+	handlers map[string]ToolHandler,
+	configured map[string]ConfiguredToolHandler,
+	contextual map[string]ContextualToolHandler,
+) (*Registry, error) {
 	registry := NewRegistry()
 	for _, spec := range specs {
 		var handler ToolHandler
@@ -435,7 +446,11 @@ func BuildRegistryWithConfigured(specs []ToolSpec, handlers map[string]ToolHandl
 		if configured != nil {
 			configuredHandler = configured[spec.Handler]
 		}
-		if handler == nil && configuredHandler == nil {
+		var contextualHandler ContextualToolHandler
+		if contextual != nil {
+			contextualHandler = contextual[spec.Handler]
+		}
+		if handler == nil && configuredHandler == nil && contextualHandler == nil {
 			return nil, unresolvedHandlerError("tool handler %q not in tool_handlers", spec.Handler)
 		}
 		config := spec.Config
@@ -450,6 +465,7 @@ func BuildRegistryWithConfigured(specs []ToolSpec, handlers map[string]ToolHandl
 			Config:      config,
 			Call:        handler,
 			CallConfig:  configuredHandler,
+			CallContext: contextualHandler,
 		}); err != nil {
 			return nil, err
 		}

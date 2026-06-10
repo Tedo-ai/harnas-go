@@ -253,6 +253,11 @@ type statusError interface {
 	HTTPStatus() int
 }
 
+type providerClassError interface {
+	error
+	ProviderErrorClass() string
+}
+
 func (l AgentLoop) appendProviderError(err error, attempt int, terminal bool) {
 	l.Session.Log.Append(EventProviderError, map[string]any{
 		"provider":    providerName(l.Provider),
@@ -290,6 +295,9 @@ func providerStatusPayload(err error) any {
 }
 
 func providerErrorClass(err error) string {
+	if typed, ok := err.(providerClassError); ok {
+		return typed.ProviderErrorClass()
+	}
 	if _, ok := err.(statusError); ok {
 		return "Harnas::Providers::HTTPError"
 	}

@@ -1,10 +1,22 @@
 package harnas
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
 )
+
+type ContextualToolHandler func(map[string]any, ToolContext) (string, error)
+
+type ToolContext struct {
+	Context         context.Context
+	SessionID       string
+	ToolUseID       string
+	SourceToolUseID string
+	Config          map[string]any
+	Extra           map[string]any
+}
 
 type Tool struct {
 	Name        string
@@ -14,6 +26,7 @@ type Tool struct {
 	Config      map[string]any
 	Call        func(map[string]any) (string, error)
 	CallConfig  func(map[string]any, map[string]any) (string, error)
+	CallContext ContextualToolHandler
 }
 
 type Registry struct {
@@ -57,6 +70,8 @@ type Runner struct {
 	Registry      *Registry
 	ParentSession *Session
 	ChildSessions map[string]*Session
+	Context       context.Context
+	Extra         map[string]any
 }
 
 func (r *Runner) Run(toolUse Event, log *Log) {
@@ -93,6 +108,23 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 		log.Append(EventToolResult, map[string]any{
 			"tool_use_id": id,
 			"output":      fmt.Sprintf("[conformance config: %s]", string(encoded)),
+			"error":       nil,
+		})
+		return
+	}
+	if tool.CallContext != nil {
+		output, err := tool.CallContext(args, r.toolContext(id, tool.Config))
+		if err != nil {
+			log.Append(EventToolResult, map[string]any{
+				"tool_use_id": id,
+				"output":      nil,
+				"error":       err.Error(),
+			})
+			return
+		}
+		log.Append(EventToolResult, map[string]any{
+			"tool_use_id": id,
+			"output":      output,
 			"error":       nil,
 		})
 		return
@@ -138,6 +170,25 @@ func (r *Runner) Run(toolUse Event, log *Log) {
 		"output":      fmt.Sprintf("[conformance stub: %s(%s)]", tool.Handler, string(encoded)),
 		"error":       nil,
 	})
+}
+
+func (r *Runner) toolContext(toolUseID string, config map[string]any) ToolContext {
+	ctx := r.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	sessionID := ""
+	if r.ParentSession != nil {
+		sessionID = r.ParentSession.ID
+	}
+	return ToolContext{
+		Context:         ctx,
+		SessionID:       sessionID,
+		ToolUseID:       toolUseID,
+		SourceToolUseID: toolUseID,
+		Config:          config,
+		Extra:           r.Extra,
+	}
 }
 
 func (r *Runner) runSpawnAgent(toolUse Event, log *Log, args map[string]any) {

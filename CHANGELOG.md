@@ -2,6 +2,19 @@
 
 All notable changes to the Go implementation of Harnas are recorded here.
 
+## [Unreleased]
+
+### Added
+
+- Added contextual tool handlers via `ToolContext` and
+  `ContextualToolHandler`, exposing the current Session id, canonical
+  `tool_use.id` provenance, cancellation context, manifest config, and an
+  opaque `Extra` bag while preserving existing `ToolHandler`,
+  `ConfiguredToolHandler`, `ToolHandlerV2`, and `WrapV1Handler`
+  compatibility.
+- Added conformance replay support for malformed streaming provider
+  frames. Validated against the expanded 71-fixture spec set.
+
 ## [0.19.4] — 2026-06-03
 
 ### Changed
