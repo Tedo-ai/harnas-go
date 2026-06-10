@@ -665,27 +665,31 @@ func installHooks(session *harnas.Session, hooks []harnas.HookSpec) error {
 }
 
 func conformanceHookHandlers() map[string]harnas.HookHandler {
+	auditPostToolUse := func(ctx map[string]any) any {
+		session, _ := ctx["session"].(*harnas.Session)
+		toolUse, _ := ctx["tool_use"].(harnas.Event)
+		toolResult, _ := ctx["tool_result"].(*harnas.Event)
+		resultSeq := 0
+		if toolResult != nil {
+			resultSeq = toolResult.Seq
+		}
+		session.Log.Append(harnas.EventAnnotation, map[string]any{
+			"kind": "conformance.hook",
+			"data": map[string]any{
+				"tool_use_id": toolUse.Payload["id"],
+				"result_seq":  float64(resultSeq),
+			},
+		})
+		return nil
+	}
+	raiseHook := func(ctx map[string]any) any {
+		panic("conformance hook failure")
+	}
 	return map[string]harnas.HookHandler{
-		"conformance.audit_post_tool_use": func(ctx map[string]any) any {
-			session, _ := ctx["session"].(*harnas.Session)
-			toolUse, _ := ctx["tool_use"].(harnas.Event)
-			toolResult, _ := ctx["tool_result"].(*harnas.Event)
-			resultSeq := 0
-			if toolResult != nil {
-				resultSeq = toolResult.Seq
-			}
-			session.Log.Append(harnas.EventAnnotation, map[string]any{
-				"kind": "conformance.hook",
-				"data": map[string]any{
-					"tool_use_id": toolUse.Payload["id"],
-					"result_seq":  float64(resultSeq),
-				},
-			})
-			return nil
-		},
-		"conformance.raise_hook": func(ctx map[string]any) any {
-			panic("conformance hook failure")
-		},
+		"conformance.audit_post_tool_use":         auditPostToolUse,
+		"conformance.audit_post_tool_use_variant": auditPostToolUse,
+		"conformance.raise_hook":                  raiseHook,
+		"conformance.raise_hook_variant":          raiseHook,
 	}
 }
 

@@ -12,7 +12,7 @@ surfaces needed for real Go adoption.
 
 ## Status
 
-- Agent conformance: 71/71 fixtures passing
+- Agent conformance: 75/75 fixtures passing
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
