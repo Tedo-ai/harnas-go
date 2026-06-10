@@ -26,7 +26,7 @@ jobs:
           cache: true
       - run: test -z "$(gofmt -l .)"
       - run: test "$(shasum mcp/testdata/mcp-content-samples.json | awk '{print $1}')" = "f0233845586eba3086e9233c146b76f950df244f"
-      - run: go test ./...
+      - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" go test ./...
       - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" bin/conformance
 
   windows-compile-check:
