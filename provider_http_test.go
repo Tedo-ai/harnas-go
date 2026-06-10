@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAnthropicProviderPostsMessagesRequest(t *testing.T) {
@@ -104,6 +105,24 @@ func TestProviderRejectsInvalidJSON(t *testing.T) {
 	_, err := provider.Call(map[string]any{"model": "gpt-test", "messages": []any{}})
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON response") {
 		t.Fatalf("expected invalid JSON error, got %v", err)
+	}
+}
+
+type blockingHTTPDoer struct{}
+
+func (blockingHTTPDoer) Do(req *http.Request) (*http.Response, error) {
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func TestProviderPostJSONUsesRequestTimeout(t *testing.T) {
+	previous := DefaultProviderHTTPTimeout
+	DefaultProviderHTTPTimeout = 20 * time.Millisecond
+	defer func() { DefaultProviderHTTPTimeout = previous }()
+
+	_, err := postJSON(blockingHTTPDoer{}, "https://example.com", nil, map[string]any{})
+	if err == nil {
+		t.Fatal("expected timeout")
 	}
 }
 

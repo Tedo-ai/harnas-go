@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBuiltinHandlersContainsCanonicalTools(t *testing.T) {
@@ -107,17 +108,25 @@ func TestBuiltinListGlobAndGrep(t *testing.T) {
 	dir := t.TempDir()
 	mustWrite(t, filepath.Join(dir, "a.txt"), "Needle\n")
 	mustWrite(t, filepath.Join(dir, "b.go"), "needle\n")
+	if err := os.MkdirAll(filepath.Join(dir, "cmd", "harnas"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(dir, "cmd", "harnas", "main.go"), "package main\n")
 
 	listing, err := BuiltinListDir(map[string]any{"path": dir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if listing != "a.txt\nb.go" {
+	if listing != "a.txt\nb.go\ncmd" {
 		t.Fatalf("unexpected listing: %q", listing)
 	}
 	matches, err := BuiltinGlob(map[string]any{"path": dir, "pattern": "*.go"})
 	if err != nil || !strings.Contains(matches, "b.go") {
 		t.Fatalf("unexpected glob: %q %v", matches, err)
+	}
+	recursive, err := BuiltinGlob(map[string]any{"path": dir, "pattern": "**/*.go"})
+	if err != nil || !strings.Contains(recursive, filepath.Join("cmd", "harnas", "main.go")) {
+		t.Fatalf("unexpected recursive glob: %q %v", recursive, err)
 	}
 	grep, err := BuiltinGrep(map[string]any{"path": dir, "pattern": "needle", "case_insensitive": true})
 	if err != nil || !strings.Contains(grep, "a.txt:1:Needle") {
@@ -147,6 +156,23 @@ func TestBuiltinFetchURL(t *testing.T) {
 	}
 	if !strings.Contains(result, "HTTP 200") || !strings.Contains(result, "hello") {
 		t.Fatalf("unexpected fetch result: %s", result)
+	}
+}
+
+func TestBuiltinFetchURLTimesOut(t *testing.T) {
+	previous := DefaultFetchURLTimeout
+	DefaultFetchURLTimeout = 20 * time.Millisecond
+	defer func() { DefaultFetchURLTimeout = previous }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+		_, _ = w.Write([]byte("late"))
+	}))
+	defer server.Close()
+
+	_, err := BuiltinFetchURL(map[string]any{"url": server.URL})
+	if err == nil {
+		t.Fatal("expected fetch timeout")
 	}
 }
 

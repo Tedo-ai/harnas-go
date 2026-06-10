@@ -46,6 +46,42 @@ func TestAnthropicStreamProviderEmitsTextDeltas(t *testing.T) {
 	assertStreamText(t, events, "hello")
 }
 
+func TestAnthropicStreamProviderKeepsMessageStartUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		writeSSE(t, w, map[string]any{
+			"type": "message_start",
+			"message": map[string]any{
+				"usage": map[string]any{"input_tokens": 7, "output_tokens": 0},
+			},
+		}, "\n\n")
+		writeSSE(t, w, map[string]any{
+			"type":  "content_block_delta",
+			"delta": map[string]any{"type": "text_delta", "text": "ok"},
+		}, "\n\n")
+		writeSSE(t, w, map[string]any{
+			"type":  "message_delta",
+			"delta": map[string]any{"stop_reason": "end_turn"},
+			"usage": map[string]any{"output_tokens": 3},
+		}, "\n\n")
+	}))
+	defer server.Close()
+
+	var events []EventArgs
+	err := (AnthropicStreamProvider{APIKey: "sk-test", Endpoint: server.URL}).Call(
+		map[string]any{"model": "claude-test", "messages": []any{}},
+		func(event EventArgs) { events = append(events, event) },
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := events[len(events)-2]
+	usage := asMap(done.Payload["usage"])
+	if usage["input_tokens"] != float64(7) || usage["output_tokens"] != float64(3) {
+		t.Fatalf("unexpected usage: %#v", usage)
+	}
+}
+
 func TestOpenAIStreamProviderEmitsToolDeltas(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("authorization") != "Bearer sk-test" {
