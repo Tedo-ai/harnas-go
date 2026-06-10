@@ -581,6 +581,20 @@ func normalizeSandboxPath(value string) string {
 	if err != nil {
 		return filepath.Clean(value)
 	}
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err == nil {
+		return resolved
+	}
+	parent := filepath.Dir(cleaned)
+	base := filepath.Base(cleaned)
+	for parent != "." && parent != string(filepath.Separator) && parent != "" {
+		resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+		if parentErr == nil {
+			return filepath.Join(resolvedParent, base)
+		}
+		base = filepath.Join(filepath.Base(parent), base)
+		parent = filepath.Dir(parent)
+	}
 	return cleaned
 }
 
@@ -614,7 +628,22 @@ func (n NetworkSandbox) Install(session *Session) {
 		rawURL := stringValue(args["url"])
 		host, ok := networkSandboxHost(rawURL)
 		if !ok {
-			return map[string]any{"allow": true}
+			consecutiveViolations++
+			if consecutiveViolations >= 3 {
+				session.Log.Append(EventRuntimeError, map[string]any{
+					"source":      "strategy",
+					"handler":     "sandbox/network",
+					"error_class": "Harnas::SandboxViolation",
+					"message":     "sandbox_network_violation_limit",
+					"reason":      "sandbox_network_violation_limit",
+					"terminal":    true,
+				})
+				panic(TurnFailed{Message: "sandbox_network_violation_limit"})
+			}
+			return map[string]any{
+				"allow":  false,
+				"reason": "Network call has an unparseable URL and is not permitted.",
+			}
 		}
 		if stringInSlice(host, allow) && !stringInSlice(host, deny) {
 			consecutiveViolations = 0
