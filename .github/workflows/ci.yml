@@ -24,6 +24,7 @@ jobs:
         with:
           go-version: ${{ matrix.go-version }}
           cache: true
+      - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" python3 bin/check-drift.py
       - run: test -z "$(gofmt -l .)"
       - run: test "$(shasum mcp/testdata/mcp-content-samples.json | awk '{print $1}')" = "f0233845586eba3086e9233c146b76f950df244f"
       - run: HARNAS_SPEC="$GITHUB_WORKSPACE/harnas-spec" go test ./...
