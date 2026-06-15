@@ -11,6 +11,7 @@ type AgentLoop struct {
 	Session        *Session
 	Projection     Projection
 	Provider       Provider
+	ProviderKind   string
 	Ingestor       Ingestor
 	StreamProvider StreamProvider
 	Runner         *Runner
@@ -122,18 +123,19 @@ func (l AgentLoop) callProviderWithRetry(request map[string]any) bool {
 
 func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 	started := time.Now()
+	providerKind := l.providerKind()
 	l.Session.Hooks.Invoke("pre_provider_call", map[string]any{"session": l.Session, "request": request})
 	l.Session.Observation.Emit("provider_called", map[string]any{
-		"provider": providerName(l.Provider),
+		"provider": providerKind,
 		"request":  request,
 	})
 	if l.StreamProvider != nil {
 		err := l.StreamProvider.Call(request, func(event EventArgs) {
-			l.handleStreamEventWithIdentity(event, streamProviderName(l.StreamProvider), stringValue(request["model"]))
+			l.handleStreamEventWithIdentity(event, providerKind, stringValue(request["model"]))
 		})
 		if err != nil {
 			l.Session.Observation.Emit("provider_failed", map[string]any{
-				"provider":    providerName(l.Provider),
+				"provider":    providerKind,
 				"duration_ms": float64(time.Since(started).Milliseconds()),
 				"error":       err.Error(),
 			})
@@ -145,7 +147,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 			"response": nil,
 		})
 		l.Session.Observation.Emit("provider_responded", map[string]any{
-			"provider":    providerName(l.Provider),
+			"provider":    providerKind,
 			"duration_ms": float64(time.Since(started).Milliseconds()),
 			"response":    nil,
 		})
@@ -153,7 +155,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 		response, err := l.Provider.Call(request)
 		if err != nil {
 			l.Session.Observation.Emit("provider_failed", map[string]any{
-				"provider":    providerName(l.Provider),
+				"provider":    providerKind,
 				"duration_ms": float64(time.Since(started).Milliseconds()),
 				"error":       err.Error(),
 			})
@@ -165,7 +167,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 			"response": response,
 		})
 		l.Session.Observation.Emit("provider_responded", map[string]any{
-			"provider":    providerName(l.Provider),
+			"provider":    providerKind,
 			"duration_ms": float64(time.Since(started).Milliseconds()),
 			"response":    response,
 		})
@@ -175,12 +177,19 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 		}
 		for _, event := range events {
 			if event.Type == EventAssistantMessage {
-				event.Payload = normalizeAssistantPayload(event.Payload, stringValue(event.Payload["provider"]), stringValue(firstNonEmptyAny(event.Payload["model"], request["model"])))
+				event.Payload = normalizeAssistantPayload(event.Payload, providerKind, stringValue(firstNonEmptyAny(event.Payload["model"], request["model"])))
 			}
 			l.Session.Log.Append(event.Type, event.Payload)
 		}
 	}
 	return nil
+}
+
+func (l AgentLoop) providerKind() string {
+	if l.ProviderKind != "" {
+		return l.ProviderKind
+	}
+	return providerName(l.Provider)
 }
 
 func streamProviderName(provider StreamProvider) string {
@@ -260,7 +269,7 @@ type providerClassError interface {
 
 func (l AgentLoop) appendProviderError(err error, attempt int, terminal bool) {
 	l.Session.Log.Append(EventProviderError, map[string]any{
-		"provider":    providerName(l.Provider),
+		"provider":    l.providerKind(),
 		"status":      providerStatusPayload(err),
 		"error_class": providerErrorClass(err),
 		"message":     err.Error(),

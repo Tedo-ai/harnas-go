@@ -55,7 +55,7 @@ func normalizeAssistantPayload(payload map[string]any, provider, model string) m
 	} else {
 		payload["usage"] = NormalizeUsage(nil)
 	}
-	if stringValue(payload["provider"]) == "" && provider != "" {
+	if provider != "" {
 		payload["provider"] = provider
 	}
 	if stringValue(payload["model"]) == "" && model != "" {

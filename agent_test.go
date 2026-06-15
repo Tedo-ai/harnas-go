@@ -31,3 +31,28 @@ func TestAgentFromManifestChat(t *testing.T) {
 		t.Fatalf("expected user message in log")
 	}
 }
+
+func TestAgentLoopUsesManifestProviderKindForAssistantIdentity(t *testing.T) {
+	session := CreateSession(nil)
+	session.Log.Append(EventUserMessage, map[string]any{"text": "hello"})
+
+	loop := AgentLoop{
+		Session:      session,
+		Projection:   AnthropicProjection{Model: "llama3.2", MaxTokens: 128},
+		Provider:     MockProvider{Text: "hi"},
+		ProviderKind: "ollama",
+		Ingestor:     AnthropicIngestor{},
+		MaxTurns:     1,
+	}
+	if _, err := loop.Run(); err != nil {
+		t.Fatal(err)
+	}
+
+	assistant, ok := session.Log.LastAssistantMessage()
+	if !ok {
+		t.Fatal("expected assistant message")
+	}
+	if got := assistant.Payload["provider"]; got != "ollama" {
+		t.Fatalf("expected manifest provider kind ollama, got %#v", got)
+	}
+}

@@ -1,11 +1,15 @@
 package harnas
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 )
+
+var DefaultAttachmentHTTPTimeout = 60 * time.Second
 
 type resolvedContentData struct {
 	Data      string
@@ -74,10 +78,20 @@ func resolveContentData(block map[string]any, store AttachmentStore) (resolvedCo
 }
 
 func fetchAttachmentURL(url string) ([]byte, string, error) {
+	return fetchAttachmentURLWithClient(&http.Client{Timeout: DefaultAttachmentHTTPTimeout}, url)
+}
+
+func fetchAttachmentURLWithClient(client HTTPDoer, url string) ([]byte, string, error) {
 	if url == "" {
 		return nil, "", fmt.Errorf("content source url is required")
 	}
-	resp, err := http.Get(url) //nolint:gosec // URL sources are explicit user content references.
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultAttachmentHTTPTimeout)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, "", fmt.Errorf("fetch attachment url %s: %w", url, err)
+	}
+	resp, err := client.Do(request) //nolint:gosec // URL sources are explicit user content references.
 	if err != nil {
 		return nil, "", fmt.Errorf("fetch attachment url %s: %w", url, err)
 	}

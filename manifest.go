@@ -94,6 +94,7 @@ type LoadedManifest struct {
 	Session        *Session
 	Projection     Projection
 	Provider       Provider
+	ProviderKind   string
 	StreamProvider StreamProvider
 	Ingestor       Ingestor
 	Registry       *Registry
@@ -293,6 +294,7 @@ func BuildManifest(manifest Manifest, options ManifestOptions) (*LoadedManifest,
 		}),
 		Projection:     projection,
 		Provider:       provider,
+		ProviderKind:   manifest.Provider.Kind,
 		StreamProvider: streamProvider,
 		Ingestor:       ingestor,
 		Registry:       registry,
@@ -319,6 +321,7 @@ func (l *LoadedManifest) Loop() AgentLoop {
 		Session:        l.Session,
 		Projection:     l.Projection,
 		Provider:       l.Provider,
+		ProviderKind:   l.ProviderKind,
 		StreamProvider: l.StreamProvider,
 		Ingestor:       l.Ingestor,
 		MaxTurns:       10,

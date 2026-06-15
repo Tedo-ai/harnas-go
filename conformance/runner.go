@@ -388,9 +388,10 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 	}
 
 	loop := harnas.AgentLoop{
-		Session:    session,
-		Projection: harnas.ProjectionForWithRegistryAndStore(manifest.Provider, manifest.System, registry, attachmentStore),
-		Ingestor:   harnas.IngestorFor(manifest.Provider.Kind),
+		Session:      session,
+		Projection:   harnas.ProjectionForWithRegistryAndStore(manifest.Provider, manifest.System, registry, attachmentStore),
+		ProviderKind: manifest.Provider.Kind,
+		Ingestor:     harnas.IngestorFor(manifest.Provider.Kind),
 		RetryPolicy: &harnas.RetryPolicy{
 			MaxAttempts:   3,
 			RetryableHTTP: map[int]bool{408: true, 429: true, 500: true, 502: true, 503: true, 504: true},
