@@ -1,6 +1,7 @@
 package harnas
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
@@ -152,7 +153,9 @@ func LoadSession(path string) (*Session, error) {
 			Type      EventType      `json:"type"`
 			Payload   map[string]any `json:"payload"`
 		}
-		if err := json.Unmarshal(line, &row); err != nil {
+		rowDecoder := json.NewDecoder(bytes.NewReader(line))
+		rowDecoder.UseNumber()
+		if err := rowDecoder.Decode(&row); err != nil {
 			return nil, err
 		}
 		if row.Seq != index {

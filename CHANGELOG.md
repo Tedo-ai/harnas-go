@@ -4,6 +4,16 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+### Added
+
+- Added the Go reference implementation for v0.20 durability Phase 1:
+  `harnas-jcs-v1` canonicalization, Event row `content_hash`, a
+  `StorageAdapter` interface with memory and file-backed adapters, and
+  `expected_next_seq` optimistic-concurrency rejection via
+  `storage_conflict`.
+- Added regression tests that run the spec's JCS/content-hash oracle
+  corpus and §21 OCC storage-law fixture directly from `HARNAS_SPEC`.
+
 ## [0.19.5] — 2026-06-10
 
 ### Added

@@ -1,5 +1,10 @@
 package harnas
 
+import (
+	"encoding/json"
+	"strconv"
+)
+
 func asMap(value any) map[string]any {
 	if value == nil {
 		return map[string]any{}
@@ -14,6 +19,12 @@ func asFloat(value any) float64 {
 	switch typed := value.(type) {
 	case float64:
 		return typed
+	case json.Number:
+		value, err := strconv.ParseFloat(typed.String(), 64)
+		if err != nil {
+			return 0
+		}
+		return value
 	case int:
 		return float64(typed)
 	default:

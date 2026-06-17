@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 )
 
@@ -857,6 +858,12 @@ func intValue(value any) int {
 		return typed
 	case float64:
 		return int(typed)
+	case json.Number:
+		out, err := strconv.Atoi(typed.String())
+		if err != nil {
+			return 0
+		}
+		return out
 	default:
 		return 0
 	}
@@ -866,6 +873,12 @@ func floatValue(value any) float64 {
 	switch typed := value.(type) {
 	case float64:
 		return typed
+	case json.Number:
+		out, err := strconv.ParseFloat(typed.String(), 64)
+		if err != nil {
+			return 0
+		}
+		return out
 	case int:
 		return float64(typed)
 	default:
