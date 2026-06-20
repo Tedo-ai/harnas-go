@@ -42,7 +42,7 @@ func TestStorageAdapterOCCLawFixture(t *testing.T) {
 				if conflict.Reason != expect["reason"] {
 					t.Fatalf("reason mismatch: got %s want %s", conflict.Reason, expect["reason"])
 				}
-				if float64(conflict.CurrentNextSeq) != expect["current_next_seq"] {
+				if !storageNumberEqual(conflict.CurrentNextSeq, expect["current_next_seq"]) {
 					t.Fatalf("current_next_seq mismatch: got %d want %v", conflict.CurrentNextSeq, expect["current_next_seq"])
 				}
 			}
@@ -165,7 +165,19 @@ func intPtrFromFloat(value any) *int {
 	if value == nil {
 		return nil
 	}
-	v := int(value.(float64))
+	var v int
+	switch typed := value.(type) {
+	case json.Number:
+		parsed, err := typed.Int64()
+		if err != nil {
+			panic(err)
+		}
+		v = int(parsed)
+	case float64:
+		v = int(typed)
+	default:
+		panic("expected numeric cursor")
+	}
 	return &v
 }
 
@@ -175,10 +187,24 @@ func ptr(v int) *int {
 
 func assertStorageRow(t *testing.T, row EventRow, expected map[string]any) {
 	t.Helper()
-	if float64(row.Seq) != expected["seq"] || row.ID != expected["id"] || row.Timestamp != expected["timestamp"] || string(row.Type) != expected["type"] {
+	if !storageNumberEqual(row.Seq, expected["seq"]) || row.ID != expected["id"] || row.Timestamp != expected["timestamp"] || string(row.Type) != expected["type"] {
 		t.Fatalf("row envelope mismatch: %#v vs %#v", row, expected)
 	}
 	if !reflect.DeepEqual(row.Payload, expected["payload"]) {
 		t.Fatalf("payload mismatch: %#v vs %#v", row.Payload, expected["payload"])
+	}
+}
+
+func storageNumberEqual(got int, expected any) bool {
+	switch typed := expected.(type) {
+	case json.Number:
+		parsed, err := typed.Int64()
+		return err == nil && got == int(parsed)
+	case float64:
+		return float64(got) == typed
+	case int:
+		return got == typed
+	default:
+		return false
 	}
 }

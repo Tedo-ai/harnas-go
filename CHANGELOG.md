@@ -11,8 +11,13 @@ All notable changes to the Go implementation of Harnas are recorded here.
   `StorageAdapter` interface with memory and file-backed adapters, and
   `expected_next_seq` optimistic-concurrency rejection via
   `storage_conflict`.
+- Added `SQLStorageAdapter`, a `database/sql` backed StorageAdapter with
+  SQLite and PostgreSQL dialect support, schema helpers, per-session dense
+  seqs, persisted content hashes, and OCC rejection.
 - Added regression tests that run the spec's JCS/content-hash oracle
   corpus and §21 OCC storage-law fixture directly from `HARNAS_SPEC`.
+- Added SQLite-backed storage law tests and a DB → JSONL → DB round-trip
+  test for the SQL adapter.
 
 ## [0.19.5] — 2026-06-10
 
