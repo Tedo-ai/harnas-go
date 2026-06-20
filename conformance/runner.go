@@ -29,7 +29,6 @@ func Run(fixtureDir string) (Result, error) {
 	if fileExists(filepath.Join(fixtureDir, "expected-projections.jsonl")) {
 		return RunProjectionFixture(fixtureDir)
 	}
-	fixture := filepath.Base(fixtureDir)
 	manifest, err := LoadManifest(fixtureDir)
 	if err != nil {
 		return Result{}, err
@@ -78,14 +77,8 @@ func Run(fixtureDir string) (Result, error) {
 	}
 
 	actual := session.Log.Events()
-	if fixture == "with-spawn-agent-reciprocity" {
-		actual = normalizeSpawnReciprocityActual(actual)
-	}
-	if filepath.Base(fixtureDir) == "with-credential-proxy-injection" {
-		encoded, _ := json.Marshal(actual)
-		if strings.Contains(string(encoded), "SECRET-DO-NOT-LOG") {
-			return Result{}, fmt.Errorf("credential value leaked into serialized Log")
-		}
+	if err := verifyFixtureAssertions(fixtureDir, actual); err != nil {
+		return Result{}, err
 	}
 	diff := FirstDiff(actual, expected)
 	if diff == "" && fileExists(expectedDeltasPath) {
@@ -115,7 +108,7 @@ func Run(fixtureDir string) (Result, error) {
 		}
 	}
 	return Result{
-		Fixture:  fixture,
+		Fixture:  filepath.Base(fixtureDir),
 		Passed:   diff == "",
 		Actual:   actual,
 		Expected: expected,
@@ -125,6 +118,35 @@ func Run(fixtureDir string) (Result, error) {
 
 type isolationSpec struct {
 	Repeat int `json:"repeat"`
+}
+
+type fixtureAssertions struct {
+	ForbiddenLogSubstrings []string `json:"forbidden_log_substrings"`
+}
+
+func verifyFixtureAssertions(fixtureDir string, actual []harnas.Event) error {
+	path := filepath.Join(fixtureDir, "assertions.json")
+	if !fileExists(path) {
+		return nil
+	}
+	var spec fixtureAssertions
+	if err := readJSON(path, &spec); err != nil {
+		return err
+	}
+	if len(spec.ForbiddenLogSubstrings) == 0 {
+		return nil
+	}
+	encoded, err := json.Marshal(actual)
+	if err != nil {
+		return err
+	}
+	logText := string(encoded)
+	for _, forbidden := range spec.ForbiddenLogSubstrings {
+		if forbidden != "" && strings.Contains(logText, forbidden) {
+			return fmt.Errorf("forbidden log substring %q appears in serialized Log", forbidden)
+		}
+	}
+	return nil
 }
 
 func isolationRepeatDiff(fixtureDir string, manifest harnas.Manifest, scriptPath string, inputs []any, expected []harnas.Event) (string, error) {
@@ -532,36 +554,6 @@ func eventIDs(events []harnas.Event) []string {
 	return ids
 }
 
-func normalizeSpawnReciprocityActual(events []harnas.Event) []harnas.Event {
-	out := make([]harnas.Event, len(events))
-	copy(out, events)
-	for i, event := range out {
-		if event.Type != harnas.EventAgentSpawn {
-			continue
-		}
-		payload := map[string]any{}
-		for key, value := range event.Payload {
-			payload[key] = value
-		}
-		payload["spawn_id"] = "<generated>"
-		payload["child_session_id"] = "<generated>"
-		payload["spawned_by_event_id"] = "<generated>"
-		out[i].Payload = payload
-	}
-	for i, event := range out {
-		if event.Type != harnas.EventToolResult {
-			continue
-		}
-		payload := map[string]any{}
-		for key, value := range event.Payload {
-			payload[key] = value
-		}
-		payload["output"] = "<generated>"
-		out[i].Payload = payload
-	}
-	return out
-}
-
 func verifySpawnChildren(parent *harnas.Session, runner *harnas.Runner, path string) error {
 	if runner == nil {
 		return fmt.Errorf("spawn child fixture requires a Runner")
@@ -766,10 +758,51 @@ func eventsEqual(left, right harnas.Event) bool {
 }
 
 func normalizeActualEventForExpected(actual, expected harnas.Event) harnas.Event {
+	if expected.ID == "" {
+		actual.ID = ""
+	} else if expected.ID == "<generated>" && actual.ID != "" {
+		actual.ID = "<generated>"
+	}
 	if expected.Timestamp == "" {
 		actual.Timestamp = ""
 	} else if expected.Timestamp == "<generated>" && actual.Timestamp != "" {
 		actual.Timestamp = "<generated>"
+	}
+	actual.Payload = normalizeActualValueForExpected(actual.Payload, expected.Payload).(map[string]any)
+	return actual
+}
+
+func normalizeActualValueForExpected(actual, expected any) any {
+	if expected == "<generated>" && actual != nil && actual != "" {
+		return "<generated>"
+	}
+	actualMap, actualMapOK := actual.(map[string]any)
+	expectedMap, expectedMapOK := expected.(map[string]any)
+	if actualMapOK && expectedMapOK {
+		out := map[string]any{}
+		for key, actualValue := range actualMap {
+			out[key] = actualValue
+		}
+		for key, expectedValue := range expectedMap {
+			if actualValue, ok := actualMap[key]; ok {
+				out[key] = normalizeActualValueForExpected(actualValue, expectedValue)
+			}
+		}
+		return out
+	}
+	actualSlice, actualSliceOK := actual.([]any)
+	expectedSlice, expectedSliceOK := expected.([]any)
+	if actualSliceOK && expectedSliceOK {
+		out := make([]any, len(actualSlice))
+		copy(out, actualSlice)
+		limit := len(actualSlice)
+		if len(expectedSlice) < limit {
+			limit = len(expectedSlice)
+		}
+		for i := range limit {
+			out[i] = normalizeActualValueForExpected(actualSlice[i], expectedSlice[i])
+		}
+		return out
 	}
 	return actual
 }
