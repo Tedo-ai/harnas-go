@@ -65,6 +65,9 @@ func (p AnthropicProjection) translate(event Event) (string, []any, error) {
 		blocks, err := p.contentBlocks(event.Payload)
 		return "user", blocks, err
 	case EventAssistantMessage:
+		if wire, ok := providerCarrierWires(event.Payload["provider_items"], "anthropic.messages"); ok {
+			return "assistant", wire, nil
+		}
 		blocks := anthropicReasoningBlocks(event)
 		contentBlocks, err := p.contentBlocks(event.Payload)
 		if err != nil {
@@ -114,6 +117,10 @@ func (p AnthropicProjection) contentBlocks(payload map[string]any) ([]any, error
 	for _, block := range messageContentBlocks(payload) {
 		switch stringValue(block["type"]) {
 		case "text":
+			if wire, ok := providerPartWire(block, "anthropic.messages"); ok {
+				blocks = append(blocks, wire)
+				continue
+			}
 			blocks = append(blocks, map[string]any{"type": "text", "text": stringValue(block["text"])})
 		case "image":
 			if fallback, ok, err := p.fallbackIfUnsupported(block); !ok || err != nil {
@@ -233,6 +240,10 @@ func (p OpenAIProjection) Project(log *Log) (map[string]any, error) {
 			}
 			messages = append(messages, map[string]any{"role": "user", "content": content})
 		case EventAssistantMessage:
+			if wire, ok := providerCarrierWire(event.Payload["provider_items"], "openai.chat_completions"); ok {
+				messages = append(messages, asMap(wire))
+				continue
+			}
 			content, err := p.content(event.Payload)
 			if err != nil {
 				return nil, err
@@ -482,6 +493,10 @@ func (p GeminiProjection) parts(payload map[string]any) ([]map[string]any, error
 	for _, block := range messageContentBlocks(payload) {
 		switch stringValue(block["type"]) {
 		case "text":
+			if wire, ok := providerPartWire(block, "gemini.generateContent"); ok {
+				parts = append(parts, wire)
+				continue
+			}
 			text := stringValue(block["text"])
 			if text != "" {
 				parts = append(parts, map[string]any{"text": text})

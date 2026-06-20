@@ -9,6 +9,8 @@ func (OpenAIIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 	message := asMap(choice["message"])
 	text, _ := message["content"].(string)
 	stopReason := normalizeOpenAIStop(choice["finish_reason"])
+	reasoning := openAIReasoningBlocks(message)
+	hasCarrierData := openAIMessageHasCarrierData(message)
 	payload := map[string]any{
 		"text":        text,
 		"stop_reason": stopReason,
@@ -16,8 +18,19 @@ func (OpenAIIngestor) Ingest(response map[string]any) ([]EventArgs, error) {
 		"provider":    "openai",
 		"model":       stringValue(response["model"]),
 	}
-	if reasoning := openAIReasoningBlocks(message); len(reasoning) > 0 {
+	if hasCarrierData {
+		payload["content"] = []any{map[string]any{
+			"type": "text",
+			"text": text,
+			"provider_parts": []any{providerCarrier("openai.chat_completions", 0, "openai.message_content",
+				map[string]any{"content": text}, []string{"payload.content[0]"})},
+		}}
+	}
+	if len(reasoning) > 0 {
 		payload["reasoning"] = reasoning
+	}
+	if hasCarrierData && len(message) > 0 {
+		payload["provider_items"] = []any{providerCarrier("openai.chat_completions", 0, "openai.chat_message", message, []string{"payload.content[0]", "payload.reasoning[0]"})}
 	}
 	events := []EventArgs{{
 		Type:    EventAssistantMessage,
@@ -58,10 +71,36 @@ func openAIReasoningBlocks(message map[string]any) []any {
 			text = stringValue(detail["content"])
 		}
 		if text != "" {
-			blocks = append(blocks, map[string]any{"type": "text", "text": text})
+			out := map[string]any{
+				"type": "text",
+				"text": text,
+			}
+			if openAIReasoningDetailHasCarrierData(detail) {
+				out["provider_parts"] = []any{providerCarrier("openai.chat_completions", len(blocks), "openai.reasoning_detail",
+					detail, []string{"payload.reasoning[0]"})}
+			}
+			blocks = append(blocks, out)
 		}
 	}
 	return blocks
+}
+
+func openAIMessageHasCarrierData(message map[string]any) bool {
+	for _, raw := range asSlice(message["reasoning_details"]) {
+		if openAIReasoningDetailHasCarrierData(asMap(raw)) {
+			return true
+		}
+	}
+	return false
+}
+
+func openAIReasoningDetailHasCarrierData(detail map[string]any) bool {
+	for key := range detail {
+		if key != "type" && key != "text" && key != "reasoning" && key != "content" {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizeOpenAIStop(value any) string {
