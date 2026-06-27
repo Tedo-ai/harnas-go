@@ -4,6 +4,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+No changes yet.
+
+## [0.20.1] — 2026-06-27
+
 ### Added
 
 - Added the Go reference implementation for v0.20 durability Phase 1:
@@ -18,6 +22,23 @@ All notable changes to the Go implementation of Harnas are recorded here.
   corpus and §21 OCC storage-law fixture directly from `HARNAS_SPEC`.
 - Added SQLite-backed storage law tests and a DB → JSONL → DB round-trip
   test for the SQL adapter.
+- Added `VerifySessionPortable`, an embedder-facing portability self-test for
+  representative Sessions persisted outside the default file path.
+- Added `ConflictDetector` on `SQLStorageOptions` so database consumers can
+  map driver-native unique-violation errors to `StorageConflictError` without
+  harnas-go importing a database driver.
+- Added `examples/multitenant`, a compiling embedding reference for
+  concurrent multi-tenant servers using one Session per conversation,
+  StorageAdapter persistence, OCC fences, a pre-execution advisory-lock claim,
+  enforce-by-default `pre_tool_use`, and Observation-to-tracing bridging.
+- Added `WorkspaceID` on `SQLStorageOptions`; SQL storage rows are now keyed
+  by `(workspace_id, session_id[, seq])` and scoped by workspace on every
+  query, while the empty workspace preserves the prior single-tenant behavior.
+
+### Changed
+
+- Updated the multi-tenant embedding example to use the SQL adapter's native
+  `WorkspaceID` option instead of composing workspace and session ids.
 
 ## [0.19.5] — 2026-06-10
 

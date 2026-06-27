@@ -29,8 +29,9 @@ type SQLStorageOptions struct {
 	WorkspaceID string
 
 	// ConflictDetector, when set, decides whether an append error is a
-	// unique-constraint violation on (session_id, seq) — i.e. a lost
-	// optimistic-concurrency race that must surface as a StorageConflictError.
+	// unique-constraint violation on (workspace_id, session_id, seq) — i.e.
+	// a lost optimistic-concurrency race that must surface as a
+	// StorageConflictError.
 	//
 	// It exists so consumers can detect conflicts by their driver's native
 	// error (e.g. lib/pq: errors.As(err, &pqErr) && pqErr.Code == "23505")

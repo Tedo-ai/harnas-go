@@ -8,7 +8,7 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.19.5** (2026-06-10). Tracks Harnas spec 0.20.1.
+**Version 0.20.1** (2026-06-27). Tracks Harnas spec 0.20.1.
 
 ## Status
 
@@ -38,7 +38,7 @@ surfaces needed for real Go adoption.
   Harnas tool descriptor translation, and degraded startup handling
 - Subagent delegation events, cross-session projection helpers, and
   optional `spawn_agent` receipt built-in
-- v0.20 durability APIs in Unreleased: `harnas-jcs-v1`
+- v0.20 durability APIs: `harnas-jcs-v1`
   canonicalization, Event row `content_hash`, memory/file/SQL-backed
   `StorageAdapter` implementations, and `expected_next_seq` OCC fences
 
