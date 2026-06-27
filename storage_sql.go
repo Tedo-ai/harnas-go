@@ -19,13 +19,30 @@ const (
 type SQLStorageOptions struct {
 	Dialect     SQLStorageDialect
 	TablePrefix string
+
+	// ConflictDetector, when set, decides whether an append error is a
+	// unique-constraint violation on (session_id, seq) — i.e. a lost
+	// optimistic-concurrency race that must surface as a StorageConflictError.
+	//
+	// It exists so consumers can detect conflicts by their driver's native
+	// error (e.g. lib/pq: errors.As(err, &pqErr) && pqErr.Code == "23505")
+	// without harnas-go importing any database driver. When nil, a
+	// driver-agnostic message match ("unique"/"duplicate") is used, which
+	// covers the standard lib/pq and pgx messages but is less robust.
+	//
+	// Note: a conflict only surfaces when AppendEvent is called with a
+	// non-nil expectedNextSeq. Concurrent writers MUST pass expectedNextSeq,
+	// or a losing racer receives the raw driver error rather than a
+	// StorageConflictError.
+	ConflictDetector func(error) bool
 }
 
 type SQLStorageAdapter struct {
-	db        *sql.DB
-	sessionID string
-	dialect   SQLStorageDialect
-	prefix    string
+	db               *sql.DB
+	sessionID        string
+	dialect          SQLStorageDialect
+	prefix           string
+	conflictDetector func(error) bool
 }
 
 func NewSQLStorageAdapter(db *sql.DB, sessionID string, opts SQLStorageOptions) *SQLStorageAdapter {
@@ -34,10 +51,11 @@ func NewSQLStorageAdapter(db *sql.DB, sessionID string, opts SQLStorageOptions) 
 		dialect = SQLStorageDialectSQLite
 	}
 	return &SQLStorageAdapter{
-		db:        db,
-		sessionID: sessionID,
-		dialect:   dialect,
-		prefix:    opts.TablePrefix,
+		db:               db,
+		sessionID:        sessionID,
+		dialect:          dialect,
+		prefix:           opts.TablePrefix,
+		conflictDetector: opts.ConflictDetector,
 	}
 }
 
@@ -296,6 +314,9 @@ func (a *SQLStorageAdapter) placeholder(index int) string {
 }
 
 func (a *SQLStorageAdapter) isUniqueConflict(err error) bool {
+	if a.conflictDetector != nil {
+		return a.conflictDetector(err)
+	}
 	text := strings.ToLower(err.Error())
 	return strings.Contains(text, "unique") || strings.Contains(text, "duplicate")
 }
