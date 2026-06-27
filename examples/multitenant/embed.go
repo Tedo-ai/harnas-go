@@ -193,18 +193,19 @@ func runTurn(session *harnas.Session, registry *harnas.Registry, provider harnas
 }
 
 // ---------------------------------------------------------------------------
-// 6. The SQL adapter wired for production: SQLSTATE-23505 conflict detection
-//    (lib/pq) so detection is exact, not message-string matching. Per-workspace
-//    tenancy: until the adapter gains a workspace_id column, scope by composing
-//    the key (today's pattern); swap to the native param when it lands.
+// 6. The SQL adapter wired for production: native per-workspace tenancy via the
+//    WorkspaceID option (rows keyed (workspace_id, session_id, seq)) plus
+//    SQLSTATE-23505 conflict detection (lib/pq) for exact unique-violation
+//    detection — while harnas-go stays driver-free.
 // ---------------------------------------------------------------------------
 
 func newProductionAdapter(db *sql.DB, workspaceID, sessionID string) *harnas.SQLStorageAdapter {
-	return harnas.NewSQLStorageAdapter(db, workspaceID+":"+sessionID, harnas.SQLStorageOptions{
-		Dialect: harnas.SQLStorageDialectPostgres,
+	return harnas.NewSQLStorageAdapter(db, sessionID, harnas.SQLStorageOptions{
+		Dialect:     harnas.SQLStorageDialectPostgres,
+		WorkspaceID: workspaceID, // storage partition key — no key composition needed
 		// Exact unique-violation detection via the driver's typed error, keeping
 		// harnas-go driver-free. lib/pq surfaces SQLSTATE 23505 for the
-		// (session_id, seq) PK violation.
+		// (workspace_id, session_id, seq) PK violation.
 		ConflictDetector: func(err error) bool {
 			type sqlStateError interface{ SQLState() string }
 			var pqErr sqlStateError
