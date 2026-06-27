@@ -20,6 +20,14 @@ type SQLStorageOptions struct {
 	Dialect     SQLStorageDialect
 	TablePrefix string
 
+	// WorkspaceID scopes every row to a tenant. It is the storage partition
+	// key: rows are keyed (workspace_id, session_id[, seq]) and queries filter
+	// by it, so the same session_id in two workspaces never collide. Leave it
+	// empty for single-tenant use — the schema degenerates to the session-only
+	// key and behaves exactly as before. Set explicitly (not parsed from the
+	// header) so partitioning is independent of session content.
+	WorkspaceID string
+
 	// ConflictDetector, when set, decides whether an append error is a
 	// unique-constraint violation on (session_id, seq) — i.e. a lost
 	// optimistic-concurrency race that must surface as a StorageConflictError.
@@ -40,6 +48,7 @@ type SQLStorageOptions struct {
 type SQLStorageAdapter struct {
 	db               *sql.DB
 	sessionID        string
+	workspaceID      string
 	dialect          SQLStorageDialect
 	prefix           string
 	conflictDetector func(error) bool
@@ -53,6 +62,7 @@ func NewSQLStorageAdapter(db *sql.DB, sessionID string, opts SQLStorageOptions) 
 	return &SQLStorageAdapter{
 		db:               db,
 		sessionID:        sessionID,
+		workspaceID:      opts.WorkspaceID,
 		dialect:          dialect,
 		prefix:           opts.TablePrefix,
 		conflictDetector: opts.ConflictDetector,
@@ -73,10 +83,13 @@ func EnsureSQLStorageSchema(db *sql.DB, opts SQLStorageOptions) error {
 	case SQLStorageDialectSQLite:
 		statements = []string{
 			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-				session_id TEXT PRIMARY KEY,
-				header_json TEXT NOT NULL
+				workspace_id TEXT NOT NULL DEFAULT '',
+				session_id TEXT NOT NULL,
+				header_json TEXT NOT NULL,
+				PRIMARY KEY (workspace_id, session_id)
 			)`, sessions),
 			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+				workspace_id TEXT NOT NULL DEFAULT '',
 				session_id TEXT NOT NULL,
 				seq INTEGER NOT NULL,
 				id TEXT NOT NULL,
@@ -84,16 +97,19 @@ func EnsureSQLStorageSchema(db *sql.DB, opts SQLStorageOptions) error {
 				type TEXT NOT NULL,
 				payload_json TEXT NOT NULL,
 				content_hash TEXT,
-				PRIMARY KEY (session_id, seq)
+				PRIMARY KEY (workspace_id, session_id, seq)
 			)`, events),
 		}
 	case SQLStorageDialectPostgres:
 		statements = []string{
 			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
-				session_id TEXT PRIMARY KEY,
-				header_json JSONB NOT NULL
+				workspace_id TEXT NOT NULL DEFAULT '',
+				session_id TEXT NOT NULL,
+				header_json JSONB NOT NULL,
+				PRIMARY KEY (workspace_id, session_id)
 			)`, sessions),
 			fmt.Sprintf(`CREATE TABLE IF NOT EXISTS %s (
+				workspace_id TEXT NOT NULL DEFAULT '',
 				session_id TEXT NOT NULL,
 				seq INTEGER NOT NULL,
 				id TEXT NOT NULL,
@@ -101,7 +117,7 @@ func EnsureSQLStorageSchema(db *sql.DB, opts SQLStorageOptions) error {
 				type TEXT NOT NULL,
 				payload_json JSONB NOT NULL,
 				content_hash TEXT,
-				PRIMARY KEY (session_id, seq)
+				PRIMARY KEY (workspace_id, session_id, seq)
 			)`, events),
 		}
 	default:
@@ -120,7 +136,7 @@ func (a *SQLStorageAdapter) LoadSession() (*SessionHeader, error) {
 		return nil, nil
 	}
 	var data string
-	err := a.db.QueryRow(a.selectHeaderSQL(), a.sessionID).Scan(&data)
+	err := a.db.QueryRow(a.selectHeaderSQL(), a.workspaceID, a.sessionID).Scan(&data)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -144,7 +160,7 @@ func (a *SQLStorageAdapter) SaveHeader(header SessionHeader) error {
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(a.upsertHeaderSQL(), a.sessionID, string(data))
+	_, err = a.db.Exec(a.upsertHeaderSQL(), a.workspaceID, a.sessionID, string(data))
 	return err
 }
 
@@ -185,7 +201,7 @@ func (a *SQLStorageAdapter) AppendEvent(draft EventDraft, expectedNextSeq *int) 
 	if err != nil {
 		return EventRow{}, err
 	}
-	if _, err := tx.Exec(a.insertEventSQL(), a.sessionID, row.Seq, row.ID, row.Timestamp, string(row.Type), payloadJSON, row.ContentHash); err != nil {
+	if _, err := tx.Exec(a.insertEventSQL(), a.workspaceID, a.sessionID, row.Seq, row.ID, row.Timestamp, string(row.Type), payloadJSON, row.ContentHash); err != nil {
 		if expectedNextSeq != nil && a.isUniqueConflict(err) {
 			current, currentErr := a.currentNextSeqTx(tx)
 			if currentErr != nil {
@@ -216,7 +232,7 @@ func (a *SQLStorageAdapter) EventsSince(cursor *int) ([]EventRow, error) {
 	if start < 0 {
 		start = 0
 	}
-	rows, err := a.db.Query(a.selectEventsSQL(), a.sessionID, start)
+	rows, err := a.db.Query(a.selectEventsSQL(), a.workspaceID, a.sessionID, start)
 	if err != nil {
 		return nil, err
 	}
@@ -243,7 +259,7 @@ func (a *SQLStorageAdapter) EventsSince(cursor *int) ([]EventRow, error) {
 
 func (a *SQLStorageAdapter) currentNextSeqTx(tx *sql.Tx) (int, error) {
 	var next sql.NullInt64
-	if err := tx.QueryRow(a.currentNextSeqSQL(), a.sessionID).Scan(&next); err != nil {
+	if err := tx.QueryRow(a.currentNextSeqSQL(), a.workspaceID, a.sessionID).Scan(&next); err != nil {
 		return 0, err
 	}
 	if !next.Valid {
@@ -253,33 +269,33 @@ func (a *SQLStorageAdapter) currentNextSeqTx(tx *sql.Tx) (int, error) {
 }
 
 func (a *SQLStorageAdapter) selectHeaderSQL() string {
-	return fmt.Sprintf("SELECT header_json FROM %s WHERE session_id = %s",
-		a.sessionsTable(), a.placeholder(1))
+	return fmt.Sprintf("SELECT header_json FROM %s WHERE workspace_id = %s AND session_id = %s",
+		a.sessionsTable(), a.placeholder(1), a.placeholder(2))
 }
 
 func (a *SQLStorageAdapter) upsertHeaderSQL() string {
 	switch a.dialect {
 	case SQLStorageDialectPostgres:
 		return fmt.Sprintf(
-			"INSERT INTO %s (session_id, header_json) VALUES (%s, %s) ON CONFLICT (session_id) DO UPDATE SET header_json = EXCLUDED.header_json",
-			a.sessionsTable(), a.placeholder(1), a.placeholder(2),
+			"INSERT INTO %s (workspace_id, session_id, header_json) VALUES (%s, %s, %s) ON CONFLICT (workspace_id, session_id) DO UPDATE SET header_json = EXCLUDED.header_json",
+			a.sessionsTable(), a.placeholder(1), a.placeholder(2), a.placeholder(3),
 		)
 	default:
 		return fmt.Sprintf(
-			"INSERT INTO %s (session_id, header_json) VALUES (%s, %s) ON CONFLICT(session_id) DO UPDATE SET header_json = excluded.header_json",
-			a.sessionsTable(), a.placeholder(1), a.placeholder(2),
+			"INSERT INTO %s (workspace_id, session_id, header_json) VALUES (%s, %s, %s) ON CONFLICT(workspace_id, session_id) DO UPDATE SET header_json = excluded.header_json",
+			a.sessionsTable(), a.placeholder(1), a.placeholder(2), a.placeholder(3),
 		)
 	}
 }
 
 func (a *SQLStorageAdapter) currentNextSeqSQL() string {
-	return fmt.Sprintf("SELECT COALESCE(MAX(seq) + 1, 0) FROM %s WHERE session_id = %s",
-		a.eventsTable(), a.placeholder(1))
+	return fmt.Sprintf("SELECT COALESCE(MAX(seq) + 1, 0) FROM %s WHERE workspace_id = %s AND session_id = %s",
+		a.eventsTable(), a.placeholder(1), a.placeholder(2))
 }
 
 func (a *SQLStorageAdapter) insertEventSQL() string {
 	return fmt.Sprintf(
-		"INSERT INTO %s (session_id, seq, id, timestamp, type, payload_json, content_hash) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+		"INSERT INTO %s (workspace_id, session_id, seq, id, timestamp, type, payload_json, content_hash) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
 		a.eventsTable(),
 		a.placeholder(1),
 		a.placeholder(2),
@@ -288,13 +304,14 @@ func (a *SQLStorageAdapter) insertEventSQL() string {
 		a.placeholder(5),
 		a.placeholder(6),
 		a.placeholder(7),
+		a.placeholder(8),
 	)
 }
 
 func (a *SQLStorageAdapter) selectEventsSQL() string {
 	return fmt.Sprintf(
-		"SELECT seq, id, timestamp, type, payload_json, content_hash FROM %s WHERE session_id = %s AND seq >= %s ORDER BY seq ASC",
-		a.eventsTable(), a.placeholder(1), a.placeholder(2),
+		"SELECT seq, id, timestamp, type, payload_json, content_hash FROM %s WHERE workspace_id = %s AND session_id = %s AND seq >= %s ORDER BY seq ASC",
+		a.eventsTable(), a.placeholder(1), a.placeholder(2), a.placeholder(3),
 	)
 }
 
