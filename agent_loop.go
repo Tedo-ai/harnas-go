@@ -35,6 +35,9 @@ func (l AgentLoop) Run() (reason string, err error) {
 	if maxTurns == 0 {
 		maxTurns = 10
 	}
+	if serr := l.Session.Log.StorageErr(); serr != nil {
+		return "", &StorageWriteError{Cause: serr}
+	}
 	reason = "max_turns_reached"
 	for range maxTurns {
 		stopReason, err := l.runTurn()
@@ -45,7 +48,11 @@ func (l AgentLoop) Run() (reason string, err error) {
 			reason = "end_turn"
 			break
 		}
-		if len(l.dispatchPendingTools()) == 0 {
+		pending := l.dispatchPendingTools()
+		if serr := l.Session.Log.StorageErr(); serr != nil {
+			return "", &StorageWriteError{Cause: serr}
+		}
+		if len(pending) == 0 {
 			reason = "no_pending_tools"
 			break
 		}
@@ -85,7 +92,11 @@ func (l AgentLoop) runTurn() (string, error) {
 		"log_size":   len(l.Session.Log.Events()),
 		"request":    request,
 	})
-	if ok := l.callProviderWithRetry(request); !ok {
+	providerOK := l.callProviderWithRetry(request)
+	if serr := l.Session.Log.StorageErr(); serr != nil {
+		return "", &StorageWriteError{Cause: serr}
+	}
+	if !providerOK {
 		return "provider_failed", nil
 	}
 
