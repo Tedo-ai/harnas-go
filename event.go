@@ -13,6 +13,8 @@ const (
 	EventAnnotation           EventType = "annotation"
 	EventProviderError        EventType = "provider_error"
 	EventRuntimeError         EventType = "runtime_error"
+	EventApprovalRequested    EventType = "approval_requested"
+	EventApprovalResolved     EventType = "approval_resolved"
 	EventAgentSpawn           EventType = "agent_spawn"
 	EventAgentStatus          EventType = "agent_status"
 	EventAgentResult          EventType = "agent_result"

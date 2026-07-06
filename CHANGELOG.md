@@ -6,6 +6,15 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ### Added
 
+- Async human-in-the-loop approval primitive (spec 07-permission R7-R11,
+  closes #9): `RequestApproval` action / `pending_approval` pre_tool_use
+  verdict with atomic batch pause, `approval_requested` / `approval_resolved`
+  Event types, the `awaiting_approval` run outcome, canonical
+  `Permission::RequireApproval` strategy, and the `ApproveToolUse` /
+  `DenyToolUse` resume APIs (approve executes exactly once and appends the
+  tool_result before any provider call; deny synthesizes the rejection
+  envelope). Resolves the resume footgun tracked in #11 by construction.
+
 - Write-through persistence: `Session.BindStorage(adapter)` binds a
   `StorageAdapter` as a durability sink — each `Log.Append` is durable under
   the OCC fence before the event is visible in memory or to the next loop
