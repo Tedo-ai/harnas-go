@@ -70,6 +70,59 @@ go install github.com/Tedo-ai/harnas-go/cmd/harnas@latest
 `bin/conformance` resolves fixtures from a sibling checkout of
 `Tedo-ai/harnas`, or from `HARNAS_SPEC` when set.
 
+## Write-through persistence
+
+By default the Log is in-memory and hosts persist snapshots with
+`Session.Save(path)`. For per-event durability, bind a `StorageAdapter` to the
+Session: every `Log.Append` then becomes durable in the adapter — under the
+OCC fence (`expected_next_seq`) — *before* the event is visible in memory or
+to the next loop step.
+
+```go
+db, _ := sql.Open("postgres", dsn)
+_ = harnas.EnsureSQLStorageSchema(db, opts)
+
+session := harnas.CreateSession(metadata)
+adapter := harnas.NewSQLStorageAdapter(db, session.ID, opts)
+if err := session.BindStorage(adapter); err != nil { /* ... */ }
+
+// ... run turns; every event is durable before the next loop step ...
+
+restored, err := harnas.LoadSessionFromStorage(adapter) // resume later
+```
+
+Semantics:
+
+- A write-through failure (storage outage or `StorageConflictError` from a
+  concurrent writer) is a first-class loop signal: `AgentLoop.Run` returns a
+  typed `*StorageWriteError`, the failed event is neither persisted nor in
+  memory, and the Log latches against further appends. Recover by reloading
+  from the adapter (`LoadSessionFromStorage`) or, after the outage is
+  resolved, `Log.ClearStorageErr()` and retry the turn.
+- Tool-affecting events are durable before the tool runs: the `tool_use` is
+  written through before `dispatchPendingTools` executes it. A crash after a
+  tool executed but before its `tool_result` append leaves that `tool_use`
+  pending in the durable transcript — see the resume note below.
+- Compaction (`compact`/`revert`/`summary`) only appends marker events; it
+  never rewrites or renumbers durable rows.
+- Events appended through (or restored from) an adapter carry the stored
+  harnas-jcs-v1 row hash in `Event.ContentHash` (in-memory only, not part of
+  the Session JSONL wire shape).
+- Sessions without a binding keep the in-memory behavior verbatim; forks do
+  not inherit the binding.
+
+### Resume semantics with real providers
+
+`AgentLoop.Run` calls the provider at the **top** of each turn, before pending
+tools are dispatched. A session reloaded from a durable transcript whose last
+assistant turn ends in an *un-fulfilled* `tool_use` therefore projects a
+request that ends in an assistant tool_use block with no following
+tool_result — which live providers (Anthropic/OpenAI) reject, even though a
+scripted or mock provider will happily continue. If you implement pause/resume
+(approval inboxes, crash recovery mid-tool), fulfill the pending `tool_use`
+first — execute it (idempotently) and append its `tool_result`, or append a
+synthesized rejection — *before* re-entering `Run()`.
+
 ## Operator CLI
 
 The Go port ships the persisted-Session operator commands shared with

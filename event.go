@@ -31,4 +31,8 @@ type Event struct {
 	Timestamp string         `json:"timestamp,omitempty"`
 	Type      EventType      `json:"type"`
 	Payload   map[string]any `json:"payload"`
+	// ContentHash carries the storage-computed harnas-jcs-v1 row hash when the
+	// event was appended through a bound StorageAdapter (or restored from one).
+	// In-memory only: it is not part of the Session JSONL wire shape.
+	ContentHash string `json:"-"`
 }

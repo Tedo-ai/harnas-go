@@ -4,7 +4,24 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
-No changes yet.
+### Added
+
+- Write-through persistence: `Session.BindStorage(adapter)` binds a
+  `StorageAdapter` as a durability sink — each `Log.Append` is durable under
+  the OCC fence before the event is visible in memory or to the next loop
+  step; `LoadSessionFromStorage(adapter)` restores (and re-binds) a Session
+  from an adapter. Write-through failures surface as a typed
+  `*StorageWriteError` from `AgentLoop.Run` with the failed event neither
+  persisted nor in memory; `Log.StorageErr`/`Log.ClearStorageErr` expose the
+  latch. Events appended through (or restored from) an adapter carry the
+  stored row hash in the new in-memory `Event.ContentHash` field.
+  (#8, #10)
+
+### Documentation
+
+- README: resume-semantics note — a reloaded session ending in an
+  un-fulfilled `tool_use` cannot be resumed with a bare `Run()` against live
+  providers; fulfill the pending tool_use first. (#11)
 
 ## [0.20.1] — 2026-06-27
 
