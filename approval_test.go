@@ -30,9 +30,9 @@ func TestRunPausesWithAwaitingApproval(t *testing.T) {
 	loop := AgentLoop{
 		Session:    session,
 		Projection: AnthropicProjection{Model: "m", MaxTokens: 16, Registry: runner.Registry},
-		Provider: MockToolProvider{ToolName: "get_current_time", ToolUseID: "toolu_t1"},
-		Ingestor: AnthropicIngestor{},
-		Runner:   runner,
+		Provider:   MockToolProvider{ToolName: "get_current_time", ToolUseID: "toolu_t1"},
+		Ingestor:   AnthropicIngestor{},
+		Runner:     runner,
 	}
 	reason, err := loop.Run()
 	if err != nil {
