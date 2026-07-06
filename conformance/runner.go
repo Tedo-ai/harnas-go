@@ -452,6 +452,32 @@ func RunSessionWithSidecars(manifest harnas.Manifest, scriptPath string, inputs 
 				session.Log.Append(harnas.EventRevert, map[string]any{"revokes": revokes})
 				continue
 			}
+			if approveSpec, ok := action["approve"]; ok {
+				spec := asMap(approveSpec)
+				if err := harnas.ApproveToolUse(session, loop.Runner, stringValue(spec["tool_use_id"]), harnas.ApprovalResolution{
+					Reason:     stringValue(spec["reason"]),
+					ResolvedBy: stringValue(spec["resolved_by"]),
+				}); err != nil {
+					return nil, nil, nil, err
+				}
+				if _, err := loop.Run(); err != nil {
+					return nil, nil, nil, err
+				}
+				continue
+			}
+			if denySpec, ok := action["deny"]; ok {
+				spec := asMap(denySpec)
+				if err := harnas.DenyToolUse(session, stringValue(spec["tool_use_id"]), harnas.ApprovalResolution{
+					Reason:     stringValue(spec["reason"]),
+					ResolvedBy: stringValue(spec["resolved_by"]),
+				}); err != nil {
+					return nil, nil, nil, err
+				}
+				if _, err := loop.Run(); err != nil {
+					return nil, nil, nil, err
+				}
+				continue
+			}
 			if appendEvents, ok := action["append_events"]; ok {
 				for _, raw := range asSlice(appendEvents) {
 					spec := asMap(raw)

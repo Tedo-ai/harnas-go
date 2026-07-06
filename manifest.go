@@ -530,6 +530,11 @@ func BuildStrategiesWithRuntime(
 				Names:        stringSlice(spec.Config["names"]),
 				ReasonFormat: stringValue(spec.Config["reason_format"]),
 			}})
+		case "Permission::RequireApproval":
+			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: RequireApproval{
+				Names:        stringSlice(spec.Config["names"]),
+				ReasonFormat: stringValue(spec.Config["reason_format"]),
+			}})
 		case "Permission::AlwaysAllow":
 			strategies = append(strategies, NamedStrategyInstallation{Name: spec.Name, OnError: spec.OnError, Inner: AlwaysAllow{}})
 		case "Permission::HumanApproval":
@@ -820,7 +825,7 @@ func knownStrategy(name string) bool {
 	switch name {
 	case "Compaction::MarkerTail", "Compaction::SummaryTail",
 		"Compaction::TokenMarkerTail", "Compaction::ToolOutputCap",
-		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval",
+		"Permission::AlwaysAllow", "Permission::DenyByName", "Permission::HumanApproval", "Permission::RequireApproval",
 		"sandbox/write", "sandbox/network", "credential/proxy", "guard/repetition", "guard/timeout", "guard/health", "guard/cost_budget":
 		return true
 	default:

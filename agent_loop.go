@@ -48,9 +48,13 @@ func (l AgentLoop) Run() (reason string, err error) {
 			reason = "end_turn"
 			break
 		}
-		pending := l.dispatchPendingTools()
+		pending, awaiting := l.dispatchPendingTools()
 		if serr := l.Session.Log.StorageErr(); serr != nil {
 			return "", &StorageWriteError{Cause: serr}
+		}
+		if awaiting {
+			reason = "awaiting_approval"
+			break
 		}
 		if len(pending) == 0 {
 			reason = "no_pending_tools"
@@ -324,16 +328,54 @@ func providerErrorClass(err error) string {
 	return fmt.Sprintf("%T", err)
 }
 
-func (l AgentLoop) dispatchPendingTools() []Event {
+func (l AgentLoop) dispatchPendingTools() ([]Event, bool) {
 	if l.Runner == nil {
-		return nil
+		return nil, false
 	}
 	pending := l.pendingToolUses()
-	for _, toolUse := range pending {
+	// First pass: compose every tool_use's pre_tool_use decision. Per
+	// 07-permission R7 composition is Refuse > RequestApproval > Allow, and
+	// per R8 any pending_approval verdict pauses the batch atomically: no
+	// tool_use executes, only approval_requested events are appended.
+	decisionsByIndex := make([][]any, len(pending))
+	type approvalRequest struct {
+		toolUse     Event
+		reason      string
+		requestedBy string
+	}
+	requests := []approvalRequest{}
+	for i, toolUse := range pending {
 		decisions := l.Session.Hooks.Invoke("pre_tool_use", map[string]any{
 			"session":  l.Session,
 			"tool_use": toolUse,
 		})
+		decisionsByIndex[i] = decisions
+		if denied, _ := deniedByHook(decisions); denied {
+			continue
+		}
+		if isPending, reason, requestedBy := pendingApprovalByHook(decisions); isPending {
+			requests = append(requests, approvalRequest{toolUse: toolUse, reason: reason, requestedBy: requestedBy})
+		}
+	}
+	if len(requests) > 0 {
+		for _, request := range requests {
+			payload := map[string]any{
+				"tool_use_id":  request.toolUse.Payload["id"],
+				"reason":       nil,
+				"requested_by": nil,
+			}
+			if request.reason != "" {
+				payload["reason"] = request.reason
+			}
+			if request.requestedBy != "" {
+				payload["requested_by"] = request.requestedBy
+			}
+			l.Session.Log.Append(EventApprovalRequested, payload)
+		}
+		return pending, true
+	}
+	for i, toolUse := range pending {
+		decisions := decisionsByIndex[i]
 		denied, reason := deniedByHook(decisions)
 		if denied {
 			if reason == "" {
@@ -360,7 +402,7 @@ func (l AgentLoop) dispatchPendingTools() []Event {
 			"denied":      denied,
 		})
 	}
-	return pending
+	return pending, false
 }
 
 func toolUseWithArgumentOverrides(toolUse Event, decisions []any) Event {
