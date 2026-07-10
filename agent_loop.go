@@ -211,6 +211,11 @@ func streamProviderName(provider StreamProvider) string {
 	if provider == nil {
 		return "unknown"
 	}
+	if kinded, ok := provider.(interface{ Kind() string }); ok {
+		if kind := kinded.Kind(); kind != "" {
+			return kind
+		}
+	}
 	switch provider.(type) {
 	case AnthropicStreamProvider, *AnthropicStreamProvider:
 		return "anthropic"
@@ -259,7 +264,20 @@ func isStreamObservationEvent(eventType EventType) bool {
 	}
 }
 
+// projectionName resolves a projection's identity for Observation events and
+// durable error events. Projections self-identify via an optional
+// Name() string method (all built-ins implement it), so custom Projection
+// implementations are never reduced to "unknown" in the audit record; the
+// type switch remains as a fallback for legacy wrappers.
 func projectionName(projection Projection) string {
+	if projection == nil {
+		return "unknown"
+	}
+	if named, ok := projection.(interface{ Name() string }); ok {
+		if name := named.Name(); name != "" {
+			return name
+		}
+	}
 	switch projection.(type) {
 	case AnthropicProjection, *AnthropicProjection:
 		return "anthropic"

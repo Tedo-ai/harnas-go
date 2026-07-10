@@ -4,6 +4,22 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+### Changed
+
+- File layout: `OpenAIProjection` and `GeminiProjection` moved out of
+  `projection_anthropic.go` into `projection_openai.go` / `projection_gemini.go`
+  (one file per provider, matching the ingestor/stream layout). No behavior
+  change. (#15)
+- Component identity is now self-identifying instead of a closed type switch:
+  projections expose `Name() string` and providers `Kind() string` (all
+  built-ins implement them); `projectionName`/`providerName`/
+  `streamProviderName` consult the optional interface first with the type
+  switch kept as fallback. Custom Projection/Provider implementations now
+  appear by name in Observation events and durable error events instead of
+  "unknown". Also fixes the buffered `OllamaProvider` reporting "unknown".
+  (#16)
+
+
 ### Added
 
 - Async human-in-the-loop approval primitive (spec 07-permission R7-R11,
