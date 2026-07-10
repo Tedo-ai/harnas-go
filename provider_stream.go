@@ -11,6 +11,9 @@ import (
 	"strings"
 )
 
+// Kind identifies this provider in Observation and provider_error events.
+func (p AnthropicStreamProvider) Kind() string { return "anthropic" }
+
 type AnthropicStreamProvider struct {
 	APIKey     string
 	APIVersion string
@@ -41,6 +44,9 @@ func (p AnthropicStreamProvider) Call(request map[string]any, emit func(EventArg
 	}, body, newAnthropicStreamState(emit))
 }
 
+// Kind identifies this provider in Observation and provider_error events.
+func (p OpenAIStreamProvider) Kind() string { return "openai" }
+
 type OpenAIStreamProvider struct {
 	APIKey   string
 	Endpoint string
@@ -70,6 +76,9 @@ func (p OpenAIStreamProvider) Call(request map[string]any, emit func(EventArgs))
 	return streamSSE(p.client(), endpoint, headers, body, newOpenAIStreamState(emit))
 }
 
+// Kind identifies this provider in Observation and provider_error events.
+func (p OllamaStreamProvider) Kind() string { return "ollama" }
+
 type OllamaStreamProvider struct {
 	BaseURL string
 	Client  HTTPDoer
@@ -86,6 +95,9 @@ func (p OllamaStreamProvider) Call(request map[string]any, emit func(EventArgs))
 		NoAuth:   true,
 	}).Call(request, emit)
 }
+
+// Kind identifies this provider in Observation and provider_error events.
+func (p GeminiStreamProvider) Kind() string { return "gemini" }
 
 type GeminiStreamProvider struct {
 	APIKey       string

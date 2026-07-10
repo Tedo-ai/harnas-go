@@ -47,6 +47,9 @@ func (e HTTPError) HTTPStatus() int {
 	return e.Status
 }
 
+// Kind identifies this provider in Observation and provider_error events.
+func (p AnthropicProvider) Kind() string { return "anthropic" }
+
 type AnthropicProvider struct {
 	APIKey     string
 	APIVersion string
@@ -75,6 +78,9 @@ func (p AnthropicProvider) Call(request map[string]any) (map[string]any, error) 
 	}, request)
 }
 
+// Kind identifies this provider in Observation and provider_error events.
+func (p OpenAIProvider) Kind() string { return "openai" }
+
 type OpenAIProvider struct {
 	APIKey   string
 	Endpoint string
@@ -101,6 +107,9 @@ func (p OpenAIProvider) Call(request map[string]any) (map[string]any, error) {
 	return postJSON(p.client(), endpoint, headers, request)
 }
 
+// Kind identifies this provider in Observation and provider_error events.
+func (p OllamaProvider) Kind() string { return "ollama" }
+
 type OllamaProvider struct {
 	BaseURL string
 	Client  HTTPDoer
@@ -117,6 +126,9 @@ func (p OllamaProvider) Call(request map[string]any) (map[string]any, error) {
 		NoAuth:   true,
 	}).Call(request)
 }
+
+// Kind identifies this provider in Observation and provider_error events.
+func (p GeminiProvider) Kind() string { return "gemini" }
 
 type GeminiProvider struct {
 	APIKey       string
@@ -224,9 +236,19 @@ func copyMap(input map[string]any) map[string]any {
 	return out
 }
 
+// providerName resolves a provider's identity for Observation and
+// provider_error events. Providers self-identify via an optional
+// Kind() string method (all built-ins implement it, including Ollama —
+// previously reported "unknown" on the buffered path); the type switch
+// remains as a fallback for legacy wrappers.
 func providerName(provider Provider) string {
 	if provider == nil {
 		return "unknown"
+	}
+	if kinded, ok := provider.(interface{ Kind() string }); ok {
+		if kind := kinded.Kind(); kind != "" {
+			return kind
+		}
 	}
 	switch provider.(type) {
 	case AnthropicProvider, *AnthropicProvider:
