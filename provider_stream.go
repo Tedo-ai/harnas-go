@@ -219,17 +219,25 @@ func streamSSE(client HTTPDoer, endpoint string, headers map[string]string, body
 }
 
 func dispatchSSEBlock(lines []string, handler sseHandler) error {
+	dataLines := make([]string, 0, 1)
 	for _, line := range lines {
 		if !strings.HasPrefix(line, "data:") {
 			continue
 		}
-		data := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if data == "" || data == "[DONE]" {
-			return nil
+		data := strings.TrimPrefix(line, "data:")
+		if strings.HasPrefix(data, " ") {
+			data = data[1:]
 		}
-		return handler.Data(data)
+		dataLines = append(dataLines, data)
 	}
-	return nil
+	if len(dataLines) == 0 {
+		return nil
+	}
+	data := strings.Join(dataLines, "\n")
+	if data == "" {
+		return nil
+	}
+	return handler.Data(data)
 }
 
 type streamState struct {
@@ -273,7 +281,7 @@ func (s *streamState) Complete() error {
 	s.emit(EventArgs{Type: EventAssistantMessage, Payload: map[string]any{
 		"text":        strings.Join(s.textParts, ""),
 		"stop_reason": s.stop,
-		"usage":       s.usage,
+		"usage":       NormalizeUsage(s.usage),
 	}})
 	return nil
 }
@@ -295,23 +303,28 @@ type anthropicToolState struct {
 type anthropicStreamState struct {
 	streamState
 	tools          map[float64]*anthropicToolState
+	openBlocks     map[float64]string
 	messageStarted bool
 	messageStopped bool
 	stopSeen       bool
 }
 
 func newAnthropicStreamState(emit func(EventArgs)) *anthropicStreamState {
-	return &anthropicStreamState{streamState: newStreamState(emit), tools: map[float64]*anthropicToolState{}}
+	return &anthropicStreamState{
+		streamState: newStreamState(emit),
+		tools:       map[float64]*anthropicToolState{},
+		openBlocks:  map[float64]string{},
+	}
 }
 
 func (s *anthropicStreamState) Data(data string) error {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return ProviderProtocolError{Provider: "anthropic", Message: "invalid SSE JSON: " + err.Error()}
+		return protocolError("anthropic", "invalid_json", "invalid SSE JSON: "+err.Error())
 	}
 	eventType := stringValue(payload["type"])
 	if eventType == "" {
-		return ProviderProtocolError{Provider: "anthropic", Message: "SSE event is missing type"}
+		return protocolError("anthropic", "invalid_frame", "SSE event is missing type")
 	}
 	switch eventType {
 	case "error":
@@ -329,10 +342,10 @@ func (s *anthropicStreamState) Data(data string) error {
 		return nil
 	case "message_start":
 		if s.messageStarted {
-			return ProviderProtocolError{Provider: "anthropic", Message: "duplicate message_start event"}
+			return protocolError("anthropic", "duplicate_start", "duplicate message_start event")
 		}
 		if s.messageStopped {
-			return ProviderProtocolError{Provider: "anthropic", Message: "message_start arrived after message_stop"}
+			return protocolError("anthropic", "invalid_order", "message_start arrived after message_stop")
 		}
 		s.messageStarted = true
 		usage := asMap(asMap(payload["message"])["usage"])
@@ -341,10 +354,21 @@ func (s *anthropicStreamState) Data(data string) error {
 		if err := s.requireActive(eventType); err != nil {
 			return err
 		}
+		index := asFloat(payload["index"])
+		if _, exists := s.openBlocks[index]; exists {
+			return protocolError("anthropic", "duplicate_block_start", "duplicate content_block_start index")
+		}
 		cb := asMap(payload["content_block"])
-		if cb["type"] == "tool_use" {
-			index := asFloat(payload["index"])
+		blockType := stringValue(cb["type"])
+		if blockType == "" {
+			return protocolError("anthropic", "invalid_frame", "content_block_start is missing content_block.type")
+		}
+		s.openBlocks[index] = blockType
+		if blockType == "tool_use" {
 			tool := &anthropicToolState{ID: stringValue(cb["id"]), Name: stringValue(cb["name"])}
+			if tool.ID == "" || tool.Name == "" {
+				return protocolError("anthropic", "invalid_tool", "tool_use block requires id and name")
+			}
 			s.tools[index] = tool
 			s.emit(EventArgs{Type: EventToolUseBegin, Payload: map[string]any{
 				"turn_id":     s.turnID,
@@ -356,29 +380,49 @@ func (s *anthropicStreamState) Data(data string) error {
 		if err := s.requireActive(eventType); err != nil {
 			return err
 		}
+		index := asFloat(payload["index"])
+		blockType, exists := s.openBlocks[index]
+		if !exists {
+			return protocolError("anthropic", "invalid_order", "content_block_delta has no open block")
+		}
 		delta := asMap(payload["delta"])
 		switch delta["type"] {
 		case "text_delta":
+			if blockType == "tool_use" {
+				return protocolError("anthropic", "invalid_frame", "text delta arrived for tool_use block")
+			}
 			s.emitText(stringValue(delta["text"]))
 		case "input_json_delta":
-			tool := s.tools[asFloat(payload["index"])]
-			if tool != nil {
-				chunk := stringValue(delta["partial_json"])
-				tool.ArgChunks = append(tool.ArgChunks, chunk)
-				s.emit(EventArgs{Type: EventToolUseArgumentDelta, Payload: map[string]any{
-					"turn_id":     s.turnID,
-					"tool_use_id": tool.ID,
-					"chunk":       chunk,
-				}})
+			tool := s.tools[index]
+			if tool == nil {
+				return protocolError("anthropic", "invalid_frame", "input_json_delta arrived outside tool_use block")
 			}
+			chunk := stringValue(delta["partial_json"])
+			tool.ArgChunks = append(tool.ArgChunks, chunk)
+			s.emit(EventArgs{Type: EventToolUseArgumentDelta, Payload: map[string]any{
+				"turn_id":     s.turnID,
+				"tool_use_id": tool.ID,
+				"chunk":       chunk,
+			}})
+		default:
+			return protocolError("anthropic", "invalid_frame", "content_block_delta has unknown delta.type")
 		}
 	case "content_block_stop":
 		if err := s.requireActive(eventType); err != nil {
 			return err
 		}
-		tool := s.tools[asFloat(payload["index"])]
+		index := asFloat(payload["index"])
+		if _, exists := s.openBlocks[index]; !exists {
+			return protocolError("anthropic", "invalid_order", "content_block_stop has no open block")
+		}
+		delete(s.openBlocks, index)
+		tool := s.tools[index]
 		if tool != nil {
-			tool.Arguments = parseArguments(tool.ArgChunks)
+			arguments, err := parseArgumentsStrict(tool.ArgChunks)
+			if err != nil {
+				return protocolError("anthropic", "invalid_tool_arguments", err.Error())
+			}
+			tool.Arguments = arguments
 			s.emit(EventArgs{Type: EventToolUseEnd, Payload: map[string]any{
 				"turn_id":     s.turnID,
 				"tool_use_id": tool.ID,
@@ -391,16 +435,25 @@ func (s *anthropicStreamState) Data(data string) error {
 		}
 		delta := asMap(payload["delta"])
 		if stop := stringValue(delta["stop_reason"]); stop != "" {
+			if s.stopSeen {
+				return protocolError("anthropic", "duplicate_terminal", "duplicate stop_reason")
+			}
 			s.stop = anthropicStopReason(stop)
 			s.stopSeen = true
 		}
 		s.mergeUsage(asMap(payload["usage"]))
 	case "message_stop":
 		if !s.messageStarted {
-			return ProviderProtocolError{Provider: "anthropic", Message: "message_stop arrived before message_start"}
+			return protocolError("anthropic", "invalid_order", "message_stop arrived before message_start")
 		}
 		if s.messageStopped {
-			return ProviderProtocolError{Provider: "anthropic", Message: "duplicate message_stop event"}
+			return protocolError("anthropic", "duplicate_terminal", "duplicate message_stop event")
+		}
+		if len(s.openBlocks) != 0 {
+			return protocolError("anthropic", "incomplete_block", "message_stop arrived with an open content block")
+		}
+		if !s.stopSeen {
+			return protocolError("anthropic", "missing_stop_reason", "message_stop arrived without a stop_reason")
 		}
 		s.messageStopped = true
 	default:
@@ -412,10 +465,10 @@ func (s *anthropicStreamState) Data(data string) error {
 
 func (s *anthropicStreamState) requireActive(eventType string) error {
 	if !s.messageStarted {
-		return ProviderProtocolError{Provider: "anthropic", Message: eventType + " arrived before message_start"}
+		return protocolError("anthropic", "invalid_order", eventType+" arrived before message_start")
 	}
 	if s.messageStopped {
-		return ProviderProtocolError{Provider: "anthropic", Message: eventType + " arrived after message_stop"}
+		return protocolError("anthropic", "invalid_order", eventType+" arrived after message_stop")
 	}
 	return nil
 }
@@ -434,13 +487,13 @@ func (s *anthropicStreamState) mergeUsage(usage map[string]any) {
 
 func (s *anthropicStreamState) Complete() error {
 	if !s.messageStarted {
-		return ProviderProtocolError{Provider: "anthropic", Message: "stream ended before message_start"}
+		return protocolError("anthropic", "missing_start", "stream ended before message_start")
 	}
 	if !s.messageStopped {
-		return ProviderProtocolError{Provider: "anthropic", Message: "stream ended before message_stop"}
+		return protocolError("anthropic", "missing_terminal", "stream ended before message_stop")
 	}
 	if !s.stopSeen {
-		return ProviderProtocolError{Provider: "anthropic", Message: "stream ended without a stop_reason"}
+		return protocolError("anthropic", "missing_stop_reason", "stream ended without a stop_reason")
 	}
 	if err := s.streamState.Complete(); err != nil {
 		return err
@@ -515,7 +568,9 @@ type openAIToolState struct {
 
 type openAIStreamState struct {
 	streamState
-	tools map[float64]*openAIToolState
+	tools      map[float64]*openAIToolState
+	finishSeen bool
+	doneSeen   bool
 }
 
 func newOpenAIStreamState(emit func(EventArgs)) *openAIStreamState {
@@ -523,9 +578,32 @@ func newOpenAIStreamState(emit func(EventArgs)) *openAIStreamState {
 }
 
 func (s *openAIStreamState) Data(data string) error {
+	if data == "[DONE]" {
+		if s.doneSeen {
+			return protocolError("openai", "duplicate_terminal", "duplicate [DONE] sentinel")
+		}
+		s.doneSeen = true
+		return nil
+	}
+	if s.doneSeen {
+		return protocolError("openai", "invalid_order", "data arrived after [DONE]")
+	}
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return nil
+		return protocolError("openai", "invalid_json", "invalid SSE JSON: "+err.Error())
+	}
+	if rawError := asMap(payload["error"]); len(rawError) > 0 {
+		errorType := stringValue(rawError["type"])
+		if errorType == "" {
+			errorType = stringValue(rawError["code"])
+		}
+		return ProviderStreamError{
+			Provider:  "openai",
+			Type:      errorType,
+			Message:   stringValue(rawError["message"]),
+			RequestID: stringValue(payload["request_id"]),
+			Status:    int(asFloat(rawError["status"])),
+		}
 	}
 	if usage := asMap(payload["usage"]); len(usage) > 0 {
 		s.usage["input_tokens"] = usage["prompt_tokens"]
@@ -536,12 +614,28 @@ func (s *openAIStreamState) Data(data string) error {
 		return nil
 	}
 	if delta := asMap(choice["delta"]); len(delta) > 0 {
-		s.handleDelta(delta)
+		if s.finishSeen {
+			return protocolError("openai", "invalid_order", "delta arrived after finish_reason")
+		}
+		if err := s.handleDelta(delta); err != nil {
+			return err
+		}
 	}
 	if finish := stringValue(choice["finish_reason"]); finish != "" {
+		if s.finishSeen {
+			return protocolError("openai", "duplicate_terminal", "duplicate finish_reason")
+		}
+		s.finishSeen = true
 		s.stop = openAIStopReason(finish)
 		for _, tool := range s.tools {
-			tool.Arguments = parseArguments(tool.ArgChunks)
+			if !tool.EmittedBegin {
+				return protocolError("openai", "invalid_tool", "tool call completed without id and name")
+			}
+			arguments, err := parseArgumentsStrict(tool.ArgChunks)
+			if err != nil {
+				return protocolError("openai", "invalid_tool_arguments", err.Error())
+			}
+			tool.Arguments = arguments
 			s.emit(EventArgs{Type: EventToolUseEnd, Payload: map[string]any{
 				"turn_id":     s.turnID,
 				"tool_use_id": tool.ID,
@@ -552,7 +646,7 @@ func (s *openAIStreamState) Data(data string) error {
 	return nil
 }
 
-func (s *openAIStreamState) handleDelta(delta map[string]any) {
+func (s *openAIStreamState) handleDelta(delta map[string]any) error {
 	s.emitText(stringValue(delta["content"]))
 	for _, raw := range asSlice(delta["tool_calls"]) {
 		call := asMap(raw)
@@ -578,6 +672,9 @@ func (s *openAIStreamState) handleDelta(delta map[string]any) {
 			}})
 		}
 		if chunk := stringValue(function["arguments"]); chunk != "" {
+			if !tool.EmittedBegin {
+				return protocolError("openai", "invalid_tool", "tool arguments arrived before id and name")
+			}
 			tool.ArgChunks = append(tool.ArgChunks, chunk)
 			s.emit(EventArgs{Type: EventToolUseArgumentDelta, Payload: map[string]any{
 				"turn_id":     s.turnID,
@@ -586,9 +683,16 @@ func (s *openAIStreamState) handleDelta(delta map[string]any) {
 			}})
 		}
 	}
+	return nil
 }
 
 func (s *openAIStreamState) Complete() error {
+	if !s.doneSeen {
+		return protocolError("openai", "missing_terminal", "stream ended before [DONE]")
+	}
+	if !s.finishSeen {
+		return protocolError("openai", "missing_finish_reason", "stream ended without finish_reason")
+	}
 	if err := s.streamState.Complete(); err != nil {
 		return err
 	}
@@ -631,7 +735,8 @@ type geminiToolState struct {
 
 type geminiStreamState struct {
 	streamState
-	tools []geminiToolState
+	tools      []geminiToolState
+	finishSeen bool
 }
 
 func newGeminiStreamState(emit func(EventArgs)) *geminiStreamState {
@@ -641,7 +746,23 @@ func newGeminiStreamState(emit func(EventArgs)) *geminiStreamState {
 func (s *geminiStreamState) Data(data string) error {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return nil
+		return protocolError("gemini", "invalid_json", "invalid SSE JSON: "+err.Error())
+	}
+	if rawError := asMap(payload["error"]); len(rawError) > 0 {
+		errorType := stringValue(rawError["status"])
+		if errorType == "" {
+			errorType = stringValue(rawError["type"])
+		}
+		return ProviderStreamError{
+			Provider:  "gemini",
+			Type:      errorType,
+			Message:   stringValue(rawError["message"]),
+			RequestID: stringValue(payload["request_id"]),
+			Status:    int(asFloat(rawError["code"])),
+		}
+	}
+	if s.finishSeen {
+		return protocolError("gemini", "invalid_order", "data arrived after finishReason")
 	}
 	candidate := firstMap(payload["candidates"])
 	for _, raw := range asSlice(asMap(candidate["content"])["parts"]) {
@@ -650,10 +771,14 @@ func (s *geminiStreamState) Data(data string) error {
 			s.emitText(text)
 		}
 		if functionCall := asMap(part["functionCall"]); len(functionCall) > 0 {
+			name := stringValue(functionCall["name"])
+			if name == "" {
+				return protocolError("gemini", "invalid_tool", "functionCall requires name")
+			}
 			id := fmt.Sprintf("gemini_fc_%d", len(s.tools))
 			tool := geminiToolState{
 				ID:        id,
-				Name:      stringValue(functionCall["name"]),
+				Name:      name,
 				Arguments: asMap(functionCall["args"]),
 			}
 			s.tools = append(s.tools, tool)
@@ -670,6 +795,10 @@ func (s *geminiStreamState) Data(data string) error {
 		}
 	}
 	if finish := stringValue(candidate["finishReason"]); finish != "" {
+		if s.finishSeen {
+			return protocolError("gemini", "duplicate_terminal", "duplicate finishReason")
+		}
+		s.finishSeen = true
 		s.stop = geminiStopReason(finish)
 	}
 	if usage := asMap(payload["usageMetadata"]); len(usage) > 0 {
@@ -680,6 +809,9 @@ func (s *geminiStreamState) Data(data string) error {
 }
 
 func (s *geminiStreamState) Complete() error {
+	if !s.finishSeen {
+		return protocolError("gemini", "missing_terminal", "stream ended before finishReason")
+	}
 	if err := s.streamState.Complete(); err != nil {
 		return err
 	}
@@ -708,14 +840,21 @@ func geminiStopReason(stop string) string {
 	}
 }
 
-func parseArguments(chunks []string) map[string]any {
+func parseArgumentsStrict(chunks []string) (map[string]any, error) {
 	joined := strings.Join(chunks, "")
 	if joined == "" {
-		return map[string]any{}
+		return map[string]any{}, nil
 	}
 	var out map[string]any
 	if err := json.Unmarshal([]byte(joined), &out); err != nil {
-		return map[string]any{}
+		return nil, fmt.Errorf("tool arguments are not valid JSON: %w", err)
 	}
-	return out
+	if out == nil {
+		return nil, fmt.Errorf("tool arguments must be a JSON object")
+	}
+	return out, nil
+}
+
+func protocolError(provider, reason, message string) ProviderProtocolError {
+	return ProviderProtocolError{Provider: provider, Reason: reason, Message: message}
 }

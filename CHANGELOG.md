@@ -6,6 +6,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ### Fixed
 
+- Provider streams now fail closed on in-band HTTP-2xx error frames,
+  malformed JSON or UTF-8, invalid tool lifecycles, and EOF without each
+  provider's required terminal evidence. No consolidated assistant or tool
+  result is emitted after failure.
 - Anthropic streaming now treats HTTP-200 SSE `error` events, malformed
   payloads, and streams missing the required `message_start` / `message_stop`
   lifecycle as provider failures instead of successful empty assistant turns.
@@ -33,6 +37,10 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ### Added
 
+- Raw provider-wire conformance for Anthropic, OpenAI, and Gemini: 18 logical
+  cases and 39 deterministic byte-fragmented executions through the
+  production HTTP/SSE parser, with a standalone
+  `cmd/provider-wire-conformance` runner.
 - Async human-in-the-loop approval primitive (spec 07-permission R7-R11,
   closes #9): `RequestApproval` action / `pending_approval` pre_tool_use
   verdict with atomic batch pause, `approval_requested` / `approval_resolved`
