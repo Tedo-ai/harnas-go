@@ -8,7 +8,7 @@ the smallest buffered AgentLoop surface and now includes the live
 provider, CLI, tool, middleware, strategy, persistence, and conformance
 surfaces needed for real Go adoption.
 
-**Version 0.20.1** (2026-06-27). Tracks Harnas spec 0.21.0.
+**Version 0.20.1** (2026-06-27). Tracks Harnas spec 0.22.0.
 
 ## Status
 
