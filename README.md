@@ -13,6 +13,9 @@ surfaces needed for real Go adoption.
 ## Status
 
 - Agent conformance: 78/78 fixtures passing
+- Raw provider-wire conformance: 18/18 cases and 39/39 deterministic
+  byte-fragmented executions through the production Anthropic, OpenAI, and
+  Gemini stream parsers
 - Buffered and streaming AgentLoop paths
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`

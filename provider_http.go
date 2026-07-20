@@ -92,6 +92,7 @@ func (e ProviderStreamError) ProviderErrorClass() string {
 // assistant message or tool call is emitted until the stream validates.
 type ProviderProtocolError struct {
 	Provider string
+	Reason   string
 	Message  string
 }
 

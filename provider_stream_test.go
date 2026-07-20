@@ -22,14 +22,16 @@ func TestAnthropicStreamProviderEmitsTextDeltas(t *testing.T) {
 		}
 		w.Header().Set("content-type", "text/event-stream")
 		writeAnthropicMessageStart(t, w, 1, "\n\n")
+		writeAnthropicTextBlockStart(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
-			"type":  "content_block_delta",
+			"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": "he"},
 		}, "\n\n")
 		writeSSE(t, w, map[string]any{
-			"type":  "content_block_delta",
+			"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": "llo"},
 		}, "\n\n")
+		writeAnthropicBlockStop(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
 			"type":  "message_delta",
 			"delta": map[string]any{"stop_reason": "end_turn"},
@@ -59,10 +61,12 @@ func TestAnthropicStreamProviderKeepsMessageStartUsage(t *testing.T) {
 				"usage": map[string]any{"input_tokens": 7, "output_tokens": 0},
 			},
 		}, "\n\n")
+		writeAnthropicTextBlockStart(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
-			"type":  "content_block_delta",
+			"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": "ok"},
 		}, "\n\n")
+		writeAnthropicBlockStop(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
 			"type":  "message_delta",
 			"delta": map[string]any{"stop_reason": "end_turn"},
@@ -180,8 +184,9 @@ func TestAnthropicStreamProviderRejectsTruncatedStream(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
 		writeAnthropicMessageStart(t, w, 7, "\n\n")
+		writeAnthropicTextBlockStart(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
-			"type":  "content_block_delta",
+			"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": "partial"},
 		}, "\n\n")
 	}))
@@ -208,10 +213,12 @@ func TestAnthropicStreamProviderAllowsUnknownEventsWithinValidLifecycle(t *testi
 		w.Header().Set("content-type", "text/event-stream")
 		writeAnthropicMessageStart(t, w, 1, "\n\n")
 		writeSSE(t, w, map[string]any{"type": "future_event", "new_field": true}, "\n\n")
+		writeAnthropicTextBlockStart(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
-			"type":  "content_block_delta",
+			"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": "ok"},
 		}, "\n\n")
+		writeAnthropicBlockStop(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
 			"type":  "message_delta",
 			"delta": map[string]any{"stop_reason": "end_turn"},
@@ -249,10 +256,12 @@ func TestAgentLoopRetriesAnthropicHTTP200ErrorsWithoutPhantomAssistant(t *testin
 			return
 		}
 		writeAnthropicMessageStart(t, w, 2, "\n\n")
+		writeAnthropicTextBlockStart(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
-			"type":  "content_block_delta",
+			"type": "content_block_delta", "index": 0,
 			"delta": map[string]any{"type": "text_delta", "text": "recovered"},
 		}, "\n\n")
+		writeAnthropicBlockStop(t, w, 0, "\n\n")
 		writeSSE(t, w, map[string]any{
 			"type":  "message_delta",
 			"delta": map[string]any{"stop_reason": "end_turn"},
@@ -370,7 +379,7 @@ func TestOpenAIStreamProviderEmitsToolDeltas(t *testing.T) {
 					"function": map[string]any{"name": "read_file", "arguments": "{\"path\""},
 				}},
 			}}},
-		}, "\n")
+		}, "\n\n")
 		writeSSE(t, w, map[string]any{
 			"choices": []any{map[string]any{"delta": map[string]any{
 				"tool_calls": []any{map[string]any{
@@ -378,10 +387,11 @@ func TestOpenAIStreamProviderEmitsToolDeltas(t *testing.T) {
 					"function": map[string]any{"arguments": ":\"a.txt\"}"},
 				}},
 			}}},
-		}, "\n")
+		}, "\n\n")
 		writeSSE(t, w, map[string]any{
 			"choices": []any{map[string]any{"finish_reason": "tool_calls"}},
-		}, "\n")
+		}, "\n\n")
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
 	}))
 	defer server.Close()
 
@@ -471,6 +481,19 @@ func writeAnthropicMessageStart(t *testing.T, w http.ResponseWriter, inputTokens
 func writeAnthropicMessageStop(t *testing.T, w http.ResponseWriter, separator string) {
 	t.Helper()
 	writeSSE(t, w, map[string]any{"type": "message_stop"}, separator)
+}
+
+func writeAnthropicTextBlockStart(t *testing.T, w http.ResponseWriter, index int, separator string) {
+	t.Helper()
+	writeSSE(t, w, map[string]any{
+		"type": "content_block_start", "index": index,
+		"content_block": map[string]any{"type": "text", "text": ""},
+	}, separator)
+}
+
+func writeAnthropicBlockStop(t *testing.T, w http.ResponseWriter, index int, separator string) {
+	t.Helper()
+	writeSSE(t, w, map[string]any{"type": "content_block_stop", "index": index}, separator)
 }
 
 func assertStreamText(t *testing.T, events []EventArgs, expected string) {
