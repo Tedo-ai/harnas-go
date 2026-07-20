@@ -4,6 +4,17 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Anthropic streaming now treats HTTP-200 SSE `error` events, malformed
+  payloads, and streams missing the required `message_start` / `message_stop`
+  lifecycle as provider failures instead of successful empty assistant turns.
+  Error type, message, request id, and equivalent HTTP status are preserved;
+  transient overloads (529) and transport/protocol failures use the existing
+  bounded provider retry loop without emitting a phantom assistant message or
+  dispatching a tool. Exhausted provider retries now return the public
+  `provider_failed` run reason instead of being mislabeled as `end_turn`.
+
 ### Changed
 
 - File layout: `OpenAIProjection` and `GeminiProjection` moved out of

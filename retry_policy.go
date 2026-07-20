@@ -27,6 +27,7 @@ func DefaultRetryPolicy() RetryPolicy {
 			502: true,
 			503: true,
 			504: true,
+			529: true,
 		},
 		Backoff: func(attempt int) time.Duration {
 			return time.Duration(250*(1<<(attempt-1))) * time.Millisecond
@@ -57,6 +58,9 @@ func (p RetryPolicy) retryable(err error) bool {
 			retryableHTTP = DefaultRetryPolicy().RetryableHTTP
 		}
 		return retryableHTTP[status]
+	}
+	if typed, ok := err.(interface{ ProviderRetryable() bool }); ok {
+		return typed.ProviderRetryable()
 	}
 	if netErr, ok := err.(net.Error); ok && (netErr.Timeout() || netErr.Temporary()) {
 		return true

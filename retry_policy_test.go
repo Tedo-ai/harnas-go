@@ -39,3 +39,14 @@ func TestRetryPolicyRetriesNetworkStyleErrors(t *testing.T) {
 		t.Fatalf("expected retry")
 	}
 }
+
+func TestRetryPolicyRetriesAnthropicOverloadAndProtocolFailures(t *testing.T) {
+	for _, err := range []error{
+		ProviderStreamError{Provider: "anthropic", Type: "overloaded_error", Status: 529},
+		ProviderProtocolError{Provider: "anthropic", Message: "stream ended before message_stop"},
+	} {
+		if decision := DefaultRetryPolicy().Decide(err, 1); !decision.Retry {
+			t.Fatalf("expected retry for %T: %v", err, err)
+		}
+	}
+}
