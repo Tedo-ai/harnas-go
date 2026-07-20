@@ -47,6 +47,68 @@ func (e HTTPError) HTTPStatus() int {
 	return e.Status
 }
 
+// ProviderStreamError is an error delivered inside an otherwise-successful
+// streaming HTTP response. Some providers (notably Anthropic) can return HTTP
+// 200, begin an SSE stream, and then emit a typed error event. Keeping the
+// provider type, message, request id, and equivalent HTTP status lets the retry
+// policy and downstream diagnostics treat that event exactly like the
+// corresponding non-streaming failure.
+type ProviderStreamError struct {
+	Provider  string
+	Type      string
+	Message   string
+	RequestID string
+	Status    int
+}
+
+func (e ProviderStreamError) Error() string {
+	provider := e.Provider
+	if provider == "" {
+		provider = "provider"
+	}
+	errorType := e.Type
+	if errorType == "" {
+		errorType = "stream_error"
+	}
+	message := e.Message
+	if message == "" {
+		message = "stream returned an error event"
+	}
+	if e.RequestID != "" {
+		return fmt.Sprintf("%s stream error %s (request_id=%s): %s", provider, errorType, e.RequestID, message)
+	}
+	return fmt.Sprintf("%s stream error %s: %s", provider, errorType, message)
+}
+
+func (e ProviderStreamError) HTTPStatus() int { return e.Status }
+
+func (e ProviderStreamError) ProviderErrorClass() string {
+	return "Harnas::Providers::StreamError"
+}
+
+// ProviderProtocolError means a successful streaming HTTP response did not
+// satisfy the provider's lifecycle contract: malformed JSON, a missing start or
+// terminal event, or an invalid event order. It is retryable because no durable
+// assistant message or tool call is emitted until the stream validates.
+type ProviderProtocolError struct {
+	Provider string
+	Message  string
+}
+
+func (e ProviderProtocolError) Error() string {
+	provider := e.Provider
+	if provider == "" {
+		provider = "provider"
+	}
+	return fmt.Sprintf("%s stream protocol error: %s", provider, e.Message)
+}
+
+func (e ProviderProtocolError) ProviderErrorClass() string {
+	return "Harnas::Providers::ProtocolError"
+}
+
+func (e ProviderProtocolError) ProviderRetryable() bool { return true }
+
 // Kind identifies this provider in Observation and provider_error events.
 func (p AnthropicProvider) Kind() string { return "anthropic" }
 

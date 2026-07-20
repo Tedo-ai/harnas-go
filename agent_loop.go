@@ -44,6 +44,10 @@ func (l AgentLoop) Run() (reason string, err error) {
 		if err != nil {
 			return "", err
 		}
+		if stopReason == "provider_failed" {
+			reason = stopReason
+			break
+		}
 		if stopReason != "tool_use" {
 			reason = "end_turn"
 			break

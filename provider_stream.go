@@ -152,7 +152,7 @@ func (p GeminiStreamProvider) client() HTTPDoer {
 type sseHandler interface {
 	Start()
 	Data(string) error
-	Complete()
+	Complete() error
 	Fail(error)
 }
 
@@ -211,7 +211,10 @@ func streamSSE(client HTTPDoer, endpoint string, headers map[string]string, body
 			return err
 		}
 	}
-	handler.Complete()
+	if err := handler.Complete(); err != nil {
+		handler.Fail(err)
+		return err
+	}
 	return nil
 }
 
@@ -261,7 +264,7 @@ func (s *streamState) emitText(chunk string) {
 	}})
 }
 
-func (s *streamState) Complete() {
+func (s *streamState) Complete() error {
 	s.emit(EventArgs{Type: EventAssistantTurnDone, Payload: map[string]any{
 		"turn_id":     s.turnID,
 		"stop_reason": s.stop,
@@ -272,6 +275,7 @@ func (s *streamState) Complete() {
 		"stop_reason": s.stop,
 		"usage":       s.usage,
 	}})
+	return nil
 }
 
 func (s *streamState) Fail(err error) {
@@ -290,7 +294,10 @@ type anthropicToolState struct {
 
 type anthropicStreamState struct {
 	streamState
-	tools map[float64]*anthropicToolState
+	tools          map[float64]*anthropicToolState
+	messageStarted bool
+	messageStopped bool
+	stopSeen       bool
 }
 
 func newAnthropicStreamState(emit func(EventArgs)) *anthropicStreamState {
@@ -300,13 +307,40 @@ func newAnthropicStreamState(emit func(EventArgs)) *anthropicStreamState {
 func (s *anthropicStreamState) Data(data string) error {
 	var payload map[string]any
 	if err := json.Unmarshal([]byte(data), &payload); err != nil {
-		return nil
+		return ProviderProtocolError{Provider: "anthropic", Message: "invalid SSE JSON: " + err.Error()}
 	}
-	switch payload["type"] {
+	eventType := stringValue(payload["type"])
+	if eventType == "" {
+		return ProviderProtocolError{Provider: "anthropic", Message: "SSE event is missing type"}
+	}
+	switch eventType {
+	case "error":
+		providerError := asMap(payload["error"])
+		errorType := stringValue(providerError["type"])
+		return ProviderStreamError{
+			Provider:  "anthropic",
+			Type:      errorType,
+			Message:   stringValue(providerError["message"]),
+			RequestID: stringValue(payload["request_id"]),
+			Status:    anthropicErrorStatus(errorType),
+		}
+	case "ping":
+		// Anthropic may interleave any number of pings.
+		return nil
 	case "message_start":
+		if s.messageStarted {
+			return ProviderProtocolError{Provider: "anthropic", Message: "duplicate message_start event"}
+		}
+		if s.messageStopped {
+			return ProviderProtocolError{Provider: "anthropic", Message: "message_start arrived after message_stop"}
+		}
+		s.messageStarted = true
 		usage := asMap(asMap(payload["message"])["usage"])
 		s.mergeUsage(usage)
 	case "content_block_start":
+		if err := s.requireActive(eventType); err != nil {
+			return err
+		}
 		cb := asMap(payload["content_block"])
 		if cb["type"] == "tool_use" {
 			index := asFloat(payload["index"])
@@ -319,6 +353,9 @@ func (s *anthropicStreamState) Data(data string) error {
 			}})
 		}
 	case "content_block_delta":
+		if err := s.requireActive(eventType); err != nil {
+			return err
+		}
 		delta := asMap(payload["delta"])
 		switch delta["type"] {
 		case "text_delta":
@@ -336,6 +373,9 @@ func (s *anthropicStreamState) Data(data string) error {
 			}
 		}
 	case "content_block_stop":
+		if err := s.requireActive(eventType); err != nil {
+			return err
+		}
 		tool := s.tools[asFloat(payload["index"])]
 		if tool != nil {
 			tool.Arguments = parseArguments(tool.ArgChunks)
@@ -346,11 +386,36 @@ func (s *anthropicStreamState) Data(data string) error {
 			}})
 		}
 	case "message_delta":
+		if err := s.requireActive(eventType); err != nil {
+			return err
+		}
 		delta := asMap(payload["delta"])
 		if stop := stringValue(delta["stop_reason"]); stop != "" {
 			s.stop = anthropicStopReason(stop)
+			s.stopSeen = true
 		}
 		s.mergeUsage(asMap(payload["usage"]))
+	case "message_stop":
+		if !s.messageStarted {
+			return ProviderProtocolError{Provider: "anthropic", Message: "message_stop arrived before message_start"}
+		}
+		if s.messageStopped {
+			return ProviderProtocolError{Provider: "anthropic", Message: "duplicate message_stop event"}
+		}
+		s.messageStopped = true
+	default:
+		// Anthropic may add new event types. Unknown events are forward-compatible
+		// as long as the required message_start/message_stop lifecycle remains valid.
+	}
+	return nil
+}
+
+func (s *anthropicStreamState) requireActive(eventType string) error {
+	if !s.messageStarted {
+		return ProviderProtocolError{Provider: "anthropic", Message: eventType + " arrived before message_start"}
+	}
+	if s.messageStopped {
+		return ProviderProtocolError{Provider: "anthropic", Message: eventType + " arrived after message_stop"}
 	}
 	return nil
 }
@@ -367,8 +432,19 @@ func (s *anthropicStreamState) mergeUsage(usage map[string]any) {
 	}
 }
 
-func (s *anthropicStreamState) Complete() {
-	s.streamState.Complete()
+func (s *anthropicStreamState) Complete() error {
+	if !s.messageStarted {
+		return ProviderProtocolError{Provider: "anthropic", Message: "stream ended before message_start"}
+	}
+	if !s.messageStopped {
+		return ProviderProtocolError{Provider: "anthropic", Message: "stream ended before message_stop"}
+	}
+	if !s.stopSeen {
+		return ProviderProtocolError{Provider: "anthropic", Message: "stream ended without a stop_reason"}
+	}
+	if err := s.streamState.Complete(); err != nil {
+		return err
+	}
 	keys := make([]float64, 0, len(s.tools))
 	for key := range s.tools {
 		keys = append(keys, key)
@@ -381,6 +457,34 @@ func (s *anthropicStreamState) Complete() {
 			"name":      tool.Name,
 			"arguments": tool.Arguments,
 		}})
+	}
+	return nil
+}
+
+func anthropicErrorStatus(errorType string) int {
+	switch errorType {
+	case "invalid_request_error":
+		return http.StatusBadRequest
+	case "authentication_error":
+		return http.StatusUnauthorized
+	case "billing_error":
+		return http.StatusPaymentRequired
+	case "permission_error":
+		return http.StatusForbidden
+	case "not_found_error":
+		return http.StatusNotFound
+	case "request_too_large":
+		return http.StatusRequestEntityTooLarge
+	case "rate_limit_error":
+		return http.StatusTooManyRequests
+	case "api_error":
+		return http.StatusInternalServerError
+	case "timeout_error":
+		return http.StatusGatewayTimeout
+	case "overloaded_error":
+		return 529
+	default:
+		return 0
 	}
 }
 
@@ -484,8 +588,10 @@ func (s *openAIStreamState) handleDelta(delta map[string]any) {
 	}
 }
 
-func (s *openAIStreamState) Complete() {
-	s.streamState.Complete()
+func (s *openAIStreamState) Complete() error {
+	if err := s.streamState.Complete(); err != nil {
+		return err
+	}
 	keys := make([]float64, 0, len(s.tools))
 	for key := range s.tools {
 		keys = append(keys, key)
@@ -499,6 +605,7 @@ func (s *openAIStreamState) Complete() {
 			"arguments": tool.Arguments,
 		}})
 	}
+	return nil
 }
 
 func openAIStopReason(stop string) string {
@@ -572,8 +679,10 @@ func (s *geminiStreamState) Data(data string) error {
 	return nil
 }
 
-func (s *geminiStreamState) Complete() {
-	s.streamState.Complete()
+func (s *geminiStreamState) Complete() error {
+	if err := s.streamState.Complete(); err != nil {
+		return err
+	}
 	for _, tool := range s.tools {
 		s.emit(EventArgs{Type: EventToolUse, Payload: map[string]any{
 			"id":        tool.ID,
@@ -581,6 +690,7 @@ func (s *geminiStreamState) Complete() {
 			"arguments": tool.Arguments,
 		}})
 	}
+	return nil
 }
 
 func geminiStopReason(stop string) string {
