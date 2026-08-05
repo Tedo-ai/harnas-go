@@ -52,6 +52,57 @@ func TestAnthropicStreamProviderEmitsTextDeltas(t *testing.T) {
 	assertStreamText(t, events, "hello")
 }
 
+func TestAnthropicStreamProviderAcceptsCompleteToolUseWithMaxTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		writeAnthropicMessageStart(t, w, 5, "\n\n")
+		writeSSE(t, w, map[string]any{
+			"type": "content_block_start", "index": 0,
+			"content_block": map[string]any{"type": "tool_use", "id": "toolu_complete", "name": "write_file"},
+		}, "\n\n")
+		writeSSE(t, w, map[string]any{
+			"type": "content_block_delta", "index": 0,
+			"delta": map[string]any{"type": "input_json_delta", "partial_json": `{"path":"a.txt"}`},
+		}, "\n\n")
+		writeAnthropicBlockStop(t, w, 0, "\n\n")
+		writeSSE(t, w, map[string]any{
+			"type":  "message_delta",
+			"delta": map[string]any{"stop_reason": "max_tokens"},
+			"usage": map[string]any{"output_tokens": 9},
+		}, "\n\n")
+		writeAnthropicMessageStop(t, w, "\n\n")
+	}))
+	defer server.Close()
+
+	var events []EventArgs
+	err := (AnthropicStreamProvider{APIKey: "sk-test", Endpoint: server.URL}).Call(
+		map[string]any{"model": "claude-test", "messages": []any{}},
+		func(event EventArgs) { events = append(events, event) },
+	)
+	if err != nil {
+		t.Fatalf("complete tool stream must normalize successfully: %v", err)
+	}
+	var assistant, toolUse *EventArgs
+	for index := range events {
+		switch events[index].Type {
+		case EventAssistantMessage:
+			assistant = &events[index]
+		case EventToolUse:
+			toolUse = &events[index]
+		}
+	}
+	if assistant == nil || assistant.Payload["stop_reason"] != "max_tokens" {
+		t.Fatalf("assistant did not preserve max_tokens: %#v", assistant)
+	}
+	if toolUse == nil || toolUse.Payload["id"] != "toolu_complete" || toolUse.Payload["name"] != "write_file" {
+		t.Fatalf("complete tool use was not consolidated: %#v", toolUse)
+	}
+	arguments := asMap(toolUse.Payload["arguments"])
+	if arguments["path"] != "a.txt" {
+		t.Fatalf("tool arguments = %#v", arguments)
+	}
+}
+
 func TestAnthropicStreamProviderKeepsMessageStartUsage(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")

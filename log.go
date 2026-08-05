@@ -42,39 +42,70 @@ func (l *Log) ClearStorageErr() {
 }
 
 func (l *Log) Append(eventType EventType, payload map[string]any) Event {
-	if l.storageErr != nil {
+	events, err := l.AppendBatch([]EventArgs{{Type: eventType, Payload: payload}})
+	if err != nil || len(events) == 0 {
 		return Event{}
 	}
-	seq := len(l.events)
-	event := Event{
-		ID:        eventID(seq, payload),
-		Seq:       seq,
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
-		Type:      eventType,
-		Payload:   payload,
+	return events[0]
+}
+
+// AppendBatch persists and publishes a semantic event group all-or-none at
+// one OCC watermark. Unlike Append, it returns write failures directly.
+func (l *Log) AppendBatch(args []EventArgs) ([]Event, error) {
+	if l.storageErr != nil {
+		return nil, l.storageErr
+	}
+	if len(args) == 0 {
+		return []Event{}, nil
+	}
+	nextSeq := len(l.events)
+	events := make([]Event, 0, len(args))
+	drafts := make([]EventDraft, 0, len(args))
+	for index, arg := range args {
+		seq := nextSeq + index
+		event := Event{
+			ID:        eventID(seq, arg.Payload),
+			Seq:       seq,
+			Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+			Type:      arg.Type,
+			Payload:   arg.Payload,
+		}
+		events = append(events, event)
+		drafts = append(drafts, EventDraft{
+			ID: event.ID, Timestamp: event.Timestamp, Type: event.Type, Payload: event.Payload,
+		})
 	}
 	if l.storage != nil {
-		expected := seq
-		row, err := l.storage.AppendEvent(EventDraft{
-			ID:        event.ID,
-			Timestamp: event.Timestamp,
-			Type:      event.Type,
-			Payload:   event.Payload,
-		}, &expected)
+		expected := nextSeq
+		rows, err := l.storage.AppendEvents(drafts, &expected)
 		if err != nil {
 			l.storageErr = err
 			l.Observation.Emit("storage_write_failed", map[string]any{
-				"seq":   float64(seq),
-				"type":  string(eventType),
+				"seq":   float64(nextSeq),
+				"count": float64(len(args)),
 				"error": err.Error(),
 			})
-			return Event{}
+			return nil, err
 		}
-		event.ContentHash = row.ContentHash
+		if len(rows) != len(events) {
+			err := fmt.Errorf("storage batch returned %d rows for %d drafts", len(rows), len(events))
+			l.storageErr = err
+			return nil, err
+		}
+		for index, row := range rows {
+			if row.Seq != nextSeq+index {
+				err := fmt.Errorf("storage batch row %d has seq %d, want %d", index, row.Seq, nextSeq+index)
+				l.storageErr = err
+				return nil, err
+			}
+			events[index].ContentHash = row.ContentHash
+		}
 	}
-	l.events = append(l.events, event)
-	l.Observation.Emit("event_appended", map[string]any{"event": event, "log_size": len(l.events)})
-	return event
+	l.events = append(l.events, events...)
+	for index, event := range events {
+		l.Observation.Emit("event_appended", map[string]any{"event": event, "log_size": nextSeq + index + 1})
+	}
+	return events, nil
 }
 
 func (l *Log) Events() []Event {

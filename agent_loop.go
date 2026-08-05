@@ -7,6 +7,24 @@ import (
 
 var sleep = time.Sleep
 
+const RunReasonIncompleteToolBatch = "incomplete_tool_batch"
+
+type providerTurn struct {
+	stopReason string
+	reason     string
+}
+
+type ProviderResponseIntegrityError struct {
+	Reason  string
+	Message string
+}
+
+func (e *ProviderResponseIntegrityError) Error() string {
+	return fmt.Sprintf("provider response integrity violation (%s): %s", e.Reason, e.Message)
+}
+
+func (e *ProviderResponseIntegrityError) ProviderRetryable() bool { return false }
+
 type AgentLoop struct {
 	Session        *Session
 	Projection     Projection
@@ -38,17 +56,28 @@ func (l AgentLoop) Run() (reason string, err error) {
 	if serr := l.Session.Log.StorageErr(); serr != nil {
 		return "", &StorageWriteError{Cause: serr}
 	}
+	if violations := AnalyzeDurableLog(l.Session.Log); len(violations) > 0 {
+		return "", &TranscriptIntegrityError{Violations: violations}
+	}
+	if l.terminalRuntimeError() {
+		return "runtime_failed", nil
+	}
+	if entryReason, blocked, entryErr := l.prepareRunEntry(); entryErr != nil {
+		return "", entryErr
+	} else if blocked {
+		return entryReason, nil
+	}
 	reason = "max_turns_reached"
 	for range maxTurns {
-		stopReason, err := l.runTurn()
+		turn, err := l.runTurn()
 		if err != nil {
 			return "", err
 		}
-		if stopReason == "provider_failed" {
-			reason = stopReason
+		if turn.reason != "" {
+			reason = turn.reason
 			break
 		}
-		if stopReason != "tool_use" {
+		if turn.stopReason != "tool_use" {
 			reason = "end_turn"
 			break
 		}
@@ -59,6 +88,10 @@ func (l AgentLoop) Run() (reason string, err error) {
 		if awaiting {
 			reason = "awaiting_approval"
 			break
+		}
+		if len(l.pendingToolUses()) > 0 {
+			_, prepareErr := PrepareProviderCall(l.Session)
+			return "", prepareErr
 		}
 		if len(pending) == 0 {
 			reason = "no_pending_tools"
@@ -72,6 +105,150 @@ func (l AgentLoop) Run() (reason string, err error) {
 	return reason, nil
 }
 
+func (l AgentLoop) prepareRunEntry() (string, bool, error) {
+	pending := l.pendingToolUses()
+	if len(pending) == 0 {
+		return "", false, nil
+	}
+	pendingIDs := map[string]bool{}
+	for _, toolUse := range pending {
+		pendingIDs[stringValue(toolUse.Payload["id"])] = true
+	}
+	awaiting := map[string]bool{}
+	resolvedWithoutResult := map[string]bool{}
+	for _, event := range l.Session.Log.Events() {
+		id := stringValue(event.Payload["tool_use_id"])
+		if !pendingIDs[id] {
+			continue
+		}
+		switch event.Type {
+		case EventApprovalRequested:
+			awaiting[id] = true
+		case EventApprovalResolved:
+			delete(awaiting, id)
+			resolvedWithoutResult[id] = true
+		case EventToolResult:
+			delete(awaiting, id)
+			delete(resolvedWithoutResult, id)
+		}
+	}
+	if len(awaiting) > 0 {
+		return "awaiting_approval", true, nil
+	}
+	if len(resolvedWithoutResult) > 0 {
+		violations := make([]IntegrityViolation, 0, len(resolvedWithoutResult))
+		for id := range resolvedWithoutResult {
+			violations = append(violations, IntegrityViolation{
+				Domain: IntegrityDomainDurableLog, Code: IntegrityResolvedApprovalOpen,
+				EventSeq: -1, ToolUseID: id,
+				Message: fmt.Sprintf("approval for tool_use %q was resolved but no result became durable", id),
+			})
+		}
+		return "", false, &TranscriptIntegrityError{Violations: violations}
+	}
+	last, ok := l.Session.Log.LastAssistantMessage()
+	if !ok || stringValue(last.Payload["stop_reason"]) != "tool_use" {
+		_, err := PrepareProviderCall(l.Session)
+		return "", false, err
+	}
+	_, nowAwaiting := l.dispatchPendingTools()
+	if serr := l.Session.Log.StorageErr(); serr != nil {
+		return "", false, &StorageWriteError{Cause: serr}
+	}
+	if nowAwaiting {
+		return "awaiting_approval", true, nil
+	}
+	if len(l.pendingToolUses()) > 0 {
+		_, err := PrepareProviderCall(l.Session)
+		return "", false, err
+	}
+	if l.terminalRuntimeError() {
+		return "runtime_failed", true, nil
+	}
+	return "", false, nil
+}
+
+func (l AgentLoop) closeProviderStep(events []EventArgs) (providerTurn, []EventArgs, error) {
+	staged := make([]EventArgs, 0, len(events))
+	toolUses := []EventArgs{}
+	toolUseIDs := map[string]bool{}
+	assistantCount := 0
+	assistantSeen := false
+	stopReason := ""
+	for _, event := range events {
+		switch event.Type {
+		case EventAssistantMessage:
+			assistantCount++
+			assistantSeen = true
+			stopReason = stringValue(event.Payload["stop_reason"])
+		case EventToolUse:
+			if !assistantSeen {
+				return providerTurn{}, nil, &ProviderResponseIntegrityError{
+					Reason: "tool_use_before_assistant", Message: "provider emitted tool_use before its assistant message",
+				}
+			}
+			id := stringValue(event.Payload["id"])
+			if id == "" {
+				return providerTurn{}, nil, &ProviderResponseIntegrityError{
+					Reason: IntegrityMissingToolUseID, Message: "provider emitted a tool_use without an id",
+				}
+			}
+			if toolUseIDs[id] {
+				return providerTurn{}, nil, &ProviderResponseIntegrityError{
+					Reason: IntegrityDuplicateToolUseID, Message: fmt.Sprintf("provider emitted duplicate tool_use id %q", id),
+				}
+			}
+			if stringValue(event.Payload["name"]) == "" {
+				return providerTurn{}, nil, &ProviderResponseIntegrityError{
+					Reason: "missing_tool_name", Message: fmt.Sprintf("provider tool_use %q has no name", id),
+				}
+			}
+			toolUseIDs[id] = true
+			toolUses = append(toolUses, event)
+		case EventToolResult:
+			return providerTurn{}, nil, &ProviderResponseIntegrityError{
+				Reason: IntegrityOrphanToolResult, Message: "provider response unexpectedly contained a tool_result",
+			}
+		}
+		staged = append(staged, event)
+	}
+	if assistantCount != 1 {
+		return providerTurn{}, nil, &ProviderResponseIntegrityError{
+			Reason:  "assistant_message_count",
+			Message: fmt.Sprintf("provider step produced %d assistant messages, want exactly one", assistantCount),
+		}
+	}
+	if stopReason == "" {
+		return providerTurn{}, nil, &ProviderResponseIntegrityError{
+			Reason: "missing_stop_reason", Message: "provider assistant message has no normalized stop_reason",
+		}
+	}
+	if stopReason == "tool_use" && len(toolUses) == 0 {
+		return providerTurn{}, nil, &ProviderResponseIntegrityError{
+			Reason: "missing_tool_use", Message: "provider ended with tool_use but emitted no complete tool calls",
+		}
+	}
+	if len(toolUses) == 0 || stopReason == "tool_use" {
+		return providerTurn{stopReason: stopReason}, staged, nil
+	}
+	for _, toolUse := range toolUses {
+		id := stringValue(toolUse.Payload["id"])
+		name := stringValue(toolUse.Payload["name"])
+		staged = append(staged, EventArgs{Type: EventToolResult, Payload: map[string]any{
+			"tool_use_id": id,
+			"output":      nil,
+			"error": fmt.Sprintf(
+				"tool %s did not complete: assistant turn ended with stop_reason %s before a tool result was recorded",
+				name, stopReason,
+			),
+			"error_class": "IncompleteToolResult",
+			"reason":      "incomplete_tool_result",
+			"stop_reason": stopReason,
+		}})
+	}
+	return providerTurn{stopReason: stopReason, reason: RunReasonIncompleteToolBatch}, staged, nil
+}
+
 func (l AgentLoop) terminalRuntimeError() bool {
 	for _, event := range l.Session.Log.Events() {
 		if event.Type == EventRuntimeError && event.Payload["terminal"] == true {
@@ -81,18 +258,22 @@ func (l AgentLoop) terminalRuntimeError() bool {
 	return false
 }
 
-func (l AgentLoop) runTurn() (string, error) {
+func (l AgentLoop) runTurn() (providerTurn, error) {
 	l.Session.Hooks.Invoke("pre_projection", map[string]any{"session": l.Session})
 	if l.terminalRuntimeError() {
-		return "runtime_failed", nil
+		return providerTurn{reason: "runtime_failed"}, nil
 	}
-	request, err := l.Projection.Project(l.Session.Log)
+	prepared, err := PrepareProviderCall(l.Session)
+	if err != nil {
+		return providerTurn{}, err
+	}
+	request, err := prepared.Project(l.Projection)
 	if err != nil {
 		if mismatch, ok := err.(CapabilityMismatchError); ok {
 			l.appendRuntimeError("capability_mismatch", mismatch.Error())
-			return "runtime_failed", nil
+			return providerTurn{reason: "runtime_failed"}, nil
 		}
-		return "", err
+		return providerTurn{}, err
 	}
 	l.Session.Hooks.Invoke("post_projection", map[string]any{"session": l.Session, "request": request})
 	l.Session.Observation.Emit("projection_invoked", map[string]any{
@@ -100,57 +281,95 @@ func (l AgentLoop) runTurn() (string, error) {
 		"log_size":   len(l.Session.Log.Events()),
 		"request":    request,
 	})
-	providerOK := l.callProviderWithRetry(request)
+	events, providerOK, err := l.callProviderWithRetry(prepared, request)
+	if err != nil {
+		return providerTurn{}, err
+	}
 	if serr := l.Session.Log.StorageErr(); serr != nil {
-		return "", &StorageWriteError{Cause: serr}
+		return providerTurn{}, &StorageWriteError{Cause: serr}
 	}
 	if !providerOK {
-		return "provider_failed", nil
+		return providerTurn{reason: "provider_failed"}, nil
 	}
-
-	last, ok := l.Session.Log.LastAssistantMessage()
-	if !ok {
-		return "end_turn", nil
+	turn, staged, err := l.closeProviderStep(events)
+	if err != nil {
+		return providerTurn{}, err
 	}
-	stopReason, _ := last.Payload["stop_reason"].(string)
-	return stopReason, nil
+	if _, err := l.Session.Log.AppendBatch(staged); err != nil {
+		return providerTurn{}, &StorageWriteError{Cause: err}
+	}
+	return turn, nil
 }
 
-func (l AgentLoop) callProviderWithRetry(request map[string]any) bool {
+func (l AgentLoop) callProviderWithRetry(prepared PreparedTranscript, request map[string]any) ([]EventArgs, bool, error) {
 	attempt := 1
 	policy := DefaultRetryPolicy()
 	if l.RetryPolicy != nil {
 		policy = *l.RetryPolicy
 	}
 	for {
-		if err := l.runOneProviderAttempt(request); err != nil {
+		events, err := l.runOneProviderAttempt(prepared, request)
+		if err != nil {
+			if _, integrityFailure := err.(*TranscriptIntegrityError); integrityFailure {
+				return nil, false, err
+			}
 			decision := policy.Decide(err, attempt)
 			if !decision.Retry {
 				l.appendProviderError(err, attempt, true)
-				return false
+				if serr := l.Session.Log.StorageErr(); serr != nil {
+					return nil, false, &StorageWriteError{Cause: serr}
+				}
+				return nil, false, nil
 			}
 			l.appendProviderError(err, attempt, false)
+			if serr := l.Session.Log.StorageErr(); serr != nil {
+				return nil, false, &StorageWriteError{Cause: serr}
+			}
+			var prepareErr error
+			prepared, prepareErr = PrepareProviderCall(l.Session)
+			if prepareErr != nil {
+				return nil, false, prepareErr
+			}
+			request, prepareErr = prepared.Project(l.Projection)
+			if prepareErr != nil {
+				return nil, false, prepareErr
+			}
 			if decision.Delay > 0 {
 				sleep(decision.Delay)
 			}
 			attempt++
 			continue
 		}
-		return true
+		return events, true, nil
 	}
 }
 
-func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
+func (l AgentLoop) runOneProviderAttempt(prepared PreparedTranscript, request map[string]any) ([]EventArgs, error) {
 	started := time.Now()
 	providerKind := l.providerKind()
 	l.Session.Hooks.Invoke("pre_provider_call", map[string]any{"session": l.Session, "request": request})
+	if !prepared.current(l.Session) {
+		return nil, &TranscriptIntegrityError{Violations: []IntegrityViolation{{
+			Domain: IntegrityDomainEffectiveTranscript, Code: IntegrityPreparedTranscriptStale,
+			EventSeq: prepared.NextSeq(),
+			Message:  "session changed after provider preparation",
+		}}}
+	}
 	l.Session.Observation.Emit("provider_called", map[string]any{
 		"provider": providerKind,
 		"request":  request,
 	})
+	staged := []EventArgs{}
 	if l.StreamProvider != nil {
 		err := l.StreamProvider.Call(request, func(event EventArgs) {
-			l.handleStreamEventWithIdentity(event, providerKind, stringValue(request["model"]))
+			if isStreamObservationEvent(event.Type) {
+				l.handleStreamEventWithIdentity(event, providerKind, stringValue(request["model"]))
+				return
+			}
+			if event.Type == EventAssistantMessage {
+				event.Payload = normalizeAssistantPayload(event.Payload, providerKind, stringValue(request["model"]))
+			}
+			staged = append(staged, event)
 		})
 		if err != nil {
 			l.Session.Observation.Emit("provider_failed", map[string]any{
@@ -158,7 +377,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 				"duration_ms": float64(time.Since(started).Milliseconds()),
 				"error":       err.Error(),
 			})
-			return err
+			return nil, err
 		}
 		l.Session.Hooks.Invoke("post_provider_call", map[string]any{
 			"session":  l.Session,
@@ -178,7 +397,7 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 				"duration_ms": float64(time.Since(started).Milliseconds()),
 				"error":       err.Error(),
 			})
-			return err
+			return nil, err
 		}
 		l.Session.Hooks.Invoke("post_provider_call", map[string]any{
 			"session":  l.Session,
@@ -192,16 +411,16 @@ func (l AgentLoop) runOneProviderAttempt(request map[string]any) error {
 		})
 		events, err := l.Ingestor.Ingest(response)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		for _, event := range events {
 			if event.Type == EventAssistantMessage {
 				event.Payload = normalizeAssistantPayload(event.Payload, providerKind, stringValue(firstNonEmptyAny(event.Payload["model"], request["model"])))
 			}
-			l.Session.Log.Append(event.Type, event.Payload)
+			staged = append(staged, event)
 		}
 	}
-	return nil
+	return staged, nil
 }
 
 func (l AgentLoop) providerKind() string {
@@ -351,10 +570,10 @@ func providerErrorClass(err error) string {
 }
 
 func (l AgentLoop) dispatchPendingTools() ([]Event, bool) {
-	if l.Runner == nil {
-		return nil, false
-	}
 	pending := l.pendingToolUses()
+	if l.Runner == nil {
+		return pending, false
+	}
 	// First pass: compose every tool_use's pre_tool_use decision. Per
 	// 07-permission R7 composition is Refuse > RequestApproval > Allow, and
 	// per R8 any pending_approval verdict pauses the batch atomically: no

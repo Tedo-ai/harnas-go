@@ -25,6 +25,80 @@ func TestSQLStorageAdapterLawsS1ThroughS8(t *testing.T) {
 	runStorageS1ThroughS8(t, adapter)
 }
 
+func TestBuiltInStorageAdaptersAppendBatchUnderOneOCCFence(t *testing.T) {
+	file := NewFileStorageAdapter(filepath.Join(t.TempDir(), "session.jsonl"))
+	if err := file.SaveHeader(SessionHeader{ID: "ses_batch", Metadata: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	sqlAdapter := NewSQLStorageAdapter(newSQLiteStorageDB(t), "ses_batch", SQLStorageOptions{Dialect: SQLStorageDialectSQLite})
+	if err := sqlAdapter.SaveHeader(SessionHeader{ID: "ses_batch", Metadata: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	adapters := map[string]StorageAdapter{
+		"memory": NewMemoryStorageAdapter(),
+		"file":   file,
+		"sql":    sqlAdapter,
+	}
+	for name, adapter := range adapters {
+		t.Run(name, func(t *testing.T) {
+			zero := 0
+			rows, err := adapter.AppendEvents([]EventDraft{
+				{ID: "evt_0", Timestamp: "2026-08-05T00:00:00Z", Type: EventAssistantMessage, Payload: map[string]any{"stop_reason": "max_tokens"}},
+				{ID: "evt_1", Timestamp: "2026-08-05T00:00:01Z", Type: EventToolUse, Payload: map[string]any{"id": "call_1"}},
+				{ID: "evt_2", Timestamp: "2026-08-05T00:00:02Z", Type: EventToolResult, Payload: map[string]any{"tool_use_id": "call_1", "error": "truncated"}},
+			}, &zero)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(rows) != 3 || rows[0].Seq != 0 || rows[2].Seq != 2 {
+				t.Fatalf("batch rows = %#v", rows)
+			}
+
+			// The stale fence rejects the whole second batch, not merely its
+			// first row.
+			_, err = adapter.AppendEvents([]EventDraft{
+				{ID: "evt_3", Type: EventAnnotation, Payload: map[string]any{}},
+				{ID: "evt_4", Type: EventAnnotation, Payload: map[string]any{}},
+			}, &zero)
+			var conflict *StorageConflictError
+			if !errors.As(err, &conflict) {
+				t.Fatalf("expected batch conflict, got %v", err)
+			}
+			all, err := adapter.EventsSince(nil)
+			if err != nil || len(all) != 3 {
+				t.Fatalf("conflicted batch changed storage: rows=%#v err=%v", all, err)
+			}
+		})
+	}
+}
+
+func TestFileAndSQLBatchRollbackOnInvalidSecondDraft(t *testing.T) {
+	file := NewFileStorageAdapter(filepath.Join(t.TempDir(), "session.jsonl"))
+	if err := file.SaveHeader(SessionHeader{ID: "ses_invalid_batch", Metadata: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	sqlAdapter := NewSQLStorageAdapter(newSQLiteStorageDB(t), "ses_invalid_batch", SQLStorageOptions{Dialect: SQLStorageDialectSQLite})
+	if err := sqlAdapter.SaveHeader(SessionHeader{ID: "ses_invalid_batch", Metadata: map[string]any{}}); err != nil {
+		t.Fatal(err)
+	}
+	for name, adapter := range map[string]StorageAdapter{"file": file, "sql": sqlAdapter} {
+		t.Run(name, func(t *testing.T) {
+			zero := 0
+			_, err := adapter.AppendEvents([]EventDraft{
+				{ID: "evt_good", Type: EventUserMessage, Payload: map[string]any{"text": "good"}},
+				{ID: "evt_bad", Type: EventAnnotation, Payload: map[string]any{"invalid": make(chan int)}},
+			}, &zero)
+			if err == nil {
+				t.Fatal("expected invalid batch to fail")
+			}
+			rows, rowsErr := adapter.EventsSince(nil)
+			if rowsErr != nil || len(rows) != 0 {
+				t.Fatalf("failed batch persisted a prefix: rows=%#v err=%v", rows, rowsErr)
+			}
+		})
+	}
+}
+
 func TestSQLStorageAdapterRoundTripsJSONLRows(t *testing.T) {
 	db := newSQLiteStorageDB(t)
 	source := NewSQLStorageAdapter(db, "ses_storage", SQLStorageOptions{Dialect: SQLStorageDialectSQLite})

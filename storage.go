@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 )
 
 const StorageConflictReason = "storage_conflict"
@@ -40,6 +41,7 @@ type StorageAdapter interface {
 	LoadSession() (*SessionHeader, error)
 	SaveHeader(SessionHeader) error
 	AppendEvent(EventDraft, *int) (EventRow, error)
+	AppendEvents([]EventDraft, *int) ([]EventRow, error)
 	EventsSince(*int) ([]EventRow, error)
 }
 
@@ -77,19 +79,30 @@ func (a *MemoryStorageAdapter) SaveHeader(header SessionHeader) error {
 }
 
 func (a *MemoryStorageAdapter) AppendEvent(draft EventDraft, expectedNextSeq *int) (EventRow, error) {
+	rows, err := a.AppendEvents([]EventDraft{draft}, expectedNextSeq)
+	if err != nil {
+		return EventRow{}, err
+	}
+	return rows[0], nil
+}
+
+func (a *MemoryStorageAdapter) AppendEvents(drafts []EventDraft, expectedNextSeq *int) ([]EventRow, error) {
 	nextSeq := len(a.rows)
 	if expectedNextSeq != nil && *expectedNextSeq != nextSeq {
-		return EventRow{}, &StorageConflictError{Reason: StorageConflictReason, ExpectedSeq: *expectedNextSeq, CurrentNextSeq: nextSeq}
+		return nil, &StorageConflictError{Reason: StorageConflictReason, ExpectedSeq: *expectedNextSeq, CurrentNextSeq: nextSeq}
 	}
-	row := EventRow{
-		Seq:       nextSeq,
-		ID:        draft.ID,
-		Timestamp: draft.Timestamp,
-		Type:      draft.Type,
-		Payload:   clonePayload(draft.Payload),
+	rows := make([]EventRow, 0, len(drafts))
+	for index, draft := range drafts {
+		rows = append(rows, EventRow{
+			Seq:       nextSeq + index,
+			ID:        draft.ID,
+			Timestamp: draft.Timestamp,
+			Type:      draft.Type,
+			Payload:   clonePayload(draft.Payload),
+		})
 	}
-	a.rows = append(a.rows, row)
-	return row, nil
+	a.rows = append(a.rows, rows...)
+	return rows, nil
 }
 
 func (a *MemoryStorageAdapter) EventsSince(cursor *int) ([]EventRow, error) {
@@ -137,29 +150,40 @@ func (a *FileStorageAdapter) SaveHeader(header SessionHeader) error {
 }
 
 func (a *FileStorageAdapter) AppendEvent(draft EventDraft, expectedNextSeq *int) (EventRow, error) {
+	rows, err := a.AppendEvents([]EventDraft{draft}, expectedNextSeq)
+	if err != nil {
+		return EventRow{}, err
+	}
+	return rows[0], nil
+}
+
+func (a *FileStorageAdapter) AppendEvents(drafts []EventDraft, expectedNextSeq *int) ([]EventRow, error) {
 	header, rows, err := a.readAll()
 	if os.IsNotExist(err) {
 		header = nil
 		rows = []EventRow{}
 	} else if err != nil {
-		return EventRow{}, err
+		return nil, err
 	}
 	nextSeq := len(rows)
 	if expectedNextSeq != nil && *expectedNextSeq != nextSeq {
-		return EventRow{}, &StorageConflictError{Reason: StorageConflictReason, ExpectedSeq: *expectedNextSeq, CurrentNextSeq: nextSeq}
+		return nil, &StorageConflictError{Reason: StorageConflictReason, ExpectedSeq: *expectedNextSeq, CurrentNextSeq: nextSeq}
 	}
-	row := EventRow{
-		Seq:       nextSeq,
-		ID:        draft.ID,
-		Timestamp: draft.Timestamp,
-		Type:      draft.Type,
-		Payload:   clonePayload(draft.Payload),
+	appended := make([]EventRow, 0, len(drafts))
+	for index, draft := range drafts {
+		appended = append(appended, EventRow{
+			Seq:       nextSeq + index,
+			ID:        draft.ID,
+			Timestamp: draft.Timestamp,
+			Type:      draft.Type,
+			Payload:   clonePayload(draft.Payload),
+		})
 	}
-	rows = append(rows, row)
+	rows = append(rows, appended...)
 	if err := a.writeAll(header, rows); err != nil {
-		return EventRow{}, err
+		return nil, err
 	}
-	return row, nil
+	return appended, nil
 }
 
 func (a *FileStorageAdapter) EventsSince(cursor *int) ([]EventRow, error) {
@@ -232,27 +256,48 @@ func (a *FileStorageAdapter) readAll() (*SessionHeader, []EventRow, error) {
 }
 
 func (a *FileStorageAdapter) writeAll(header *SessionHeader, rows []EventRow) error {
-	file, err := os.Create(a.path)
+	dir := filepath.Dir(a.path)
+	file, err := os.CreateTemp(dir, ".harnas-storage-*")
 	if err != nil {
+		return err
+	}
+	tempPath := file.Name()
+	committed := false
+	defer func() {
+		_ = file.Close()
+		if !committed {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	mode := os.FileMode(0o644)
+	if info, statErr := os.Stat(a.path); statErr == nil {
+		mode = info.Mode().Perm()
+	}
+	if err := file.Chmod(mode); err != nil {
 		return err
 	}
 	encoder := json.NewEncoder(file)
 	encoder.SetEscapeHTML(false)
 	if header != nil {
 		if err := encoder.Encode(headerMap(*header)); err != nil {
-			file.Close()
 			return err
 		}
 	}
 	for _, row := range rows {
 		if err := encoder.Encode(eventRowMap(row, row.ContentHash != "")); err != nil {
-			file.Close()
 			return err
 		}
+	}
+	if err := file.Sync(); err != nil {
+		return err
 	}
 	if err := file.Close(); err != nil {
 		return err
 	}
+	if err := os.Rename(tempPath, a.path); err != nil {
+		return err
+	}
+	committed = true
 	return nil
 }
 
