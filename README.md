@@ -17,6 +17,7 @@ surfaces needed for real Go adoption.
   byte-fragmented executions through the production Anthropic, OpenAI, and
   Gemini stream parsers
 - Buffered and streaming AgentLoop paths
+- Pair-closed provider boundary with durable truncated-tool recovery
 - Public Agent Manifest loader for v0.1 manifests
 - Agent façade and `bin/harnas chat` / `bin/harnas run`
 - Buffered HTTP providers for Anthropic, OpenAI, Gemini, and local Ollama
@@ -79,7 +80,8 @@ By default the Log is in-memory and hosts persist snapshots with
 `Session.Save(path)`. For per-event durability, bind a `StorageAdapter` to the
 Session: every `Log.Append` then becomes durable in the adapter — under the
 OCC fence (`expected_next_seq`) — *before* the event is visible in memory or
-to the next loop step.
+to the next loop step. `Log.AppendBatch` provides the same guarantee for a
+semantic event group, with no visible or durable prefix on failure.
 
 ```go
 db, _ := sql.Open("postgres", dsn)
@@ -106,6 +108,9 @@ Semantics:
   written through before `dispatchPendingTools` executes it. A crash after a
   tool executed but before its `tool_result` append leaves that `tool_use`
   pending in the durable transcript — see the resume note below.
+- A consolidated provider step is appended as one batch. A complete tool call
+  ending under `max_tokens` or another non-tool stop reason is closed in that
+  same batch with one error `tool_result` per call; none of its tools execute.
 - Compaction (`compact`/`revert`/`summary`) only appends marker events; it
   never rewrites or renumbers durable rows.
 - Events appended through (or restored from) an adapter carry the stored
@@ -116,15 +121,23 @@ Semantics:
 
 ### Resume semantics with real providers
 
-`AgentLoop.Run` calls the provider at the **top** of each turn, before pending
-tools are dispatched. A session reloaded from a durable transcript whose last
-assistant turn ends in an *un-fulfilled* `tool_use` therefore projects a
-request that ends in an assistant tool_use block with no following
-tool_result — which live providers (Anthropic/OpenAI) reject, even though a
-scripted or mock provider will happily continue. If you implement pause/resume
-(approval inboxes, crash recovery mid-tool), fulfill the pending `tool_use`
-first — execute it (idempotently) and append its `tool_result`, or append a
-synthesized rejection — *before* re-entering `Run()`.
+`AgentLoop.Run` reduces pending durable tool state **before** preparing a
+provider request. An unresolved approval returns `awaiting_approval` with zero
+provider calls. A pending batch from a normal `tool_use` stop is resumed and
+fulfilled before the provider may run; mixed approval batches resume their
+remaining allowed calls after the approved call resolves.
+
+Every built-in provider call is prepared from an opaque, pair-closed
+`PreparedTranscript` bound to the Session watermark and effective transcript
+hash. Raw referential corruption, unsafe compact/revert output, or a Session
+change after preparation fails with `*TranscriptIntegrityError` and makes zero
+provider calls.
+
+Harnas cannot yet determine whether a tool side effect completed before a
+crash that occurred prior to result persistence. Resuming such a pending tool
+may invoke it again. Hosts must make mutating tools idempotent or reconcile the
+side effect before re-entering `Run`; a resolved approval with no durable
+result fails closed rather than guessing.
 
 ## Operator CLI
 

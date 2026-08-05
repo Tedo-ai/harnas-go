@@ -1001,7 +1001,11 @@ func (s SummaryTail) summarize(messages []Event, seqs []int) string {
 		prompt = "Summarize the preceding conversation tersely, preserving facts the agent will need to continue the work. Return only the summary text, no preamble."
 	}
 	subLog.Append(EventUserMessage, map[string]any{"text": prompt})
-	request, err := s.Projection.Project(subLog)
+	prepared, err := PrepareProviderCall(NewSession("ses_summary_"+newID(), subLog, nil))
+	if err != nil {
+		return ""
+	}
+	request, err := prepared.Project(s.Projection)
 	if err != nil {
 		return ""
 	}

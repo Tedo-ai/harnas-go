@@ -166,60 +166,72 @@ func (a *SQLStorageAdapter) SaveHeader(header SessionHeader) error {
 }
 
 func (a *SQLStorageAdapter) AppendEvent(draft EventDraft, expectedNextSeq *int) (EventRow, error) {
+	rows, err := a.AppendEvents([]EventDraft{draft}, expectedNextSeq)
+	if err != nil {
+		return EventRow{}, err
+	}
+	return rows[0], nil
+}
+
+func (a *SQLStorageAdapter) AppendEvents(drafts []EventDraft, expectedNextSeq *int) ([]EventRow, error) {
 	if a.sessionID == "" {
-		return EventRow{}, fmt.Errorf("SQLStorageAdapter requires a session id")
+		return nil, fmt.Errorf("SQLStorageAdapter requires a session id")
 	}
 	tx, err := a.db.BeginTx(context.Background(), nil)
 	if err != nil {
-		return EventRow{}, err
+		return nil, err
 	}
 	defer tx.Rollback()
 
 	nextSeq, err := a.currentNextSeqTx(tx)
 	if err != nil {
-		return EventRow{}, err
+		return nil, err
 	}
 	if expectedNextSeq != nil && *expectedNextSeq != nextSeq {
-		return EventRow{}, &StorageConflictError{
+		return nil, &StorageConflictError{
 			Reason:         StorageConflictReason,
 			ExpectedSeq:    *expectedNextSeq,
 			CurrentNextSeq: nextSeq,
 		}
 	}
-	row := EventRow{
-		Seq:       nextSeq,
-		ID:        draft.ID,
-		Timestamp: draft.Timestamp,
-		Type:      draft.Type,
-		Payload:   clonePayload(draft.Payload),
-	}
-	hash, err := ContentHashForEventRow(row)
-	if err != nil {
-		return EventRow{}, err
-	}
-	row.ContentHash = hash
-	payloadJSON, err := jsonString(row.Payload)
-	if err != nil {
-		return EventRow{}, err
-	}
-	if _, err := tx.Exec(a.insertEventSQL(), a.workspaceID, a.sessionID, row.Seq, row.ID, row.Timestamp, string(row.Type), payloadJSON, row.ContentHash); err != nil {
-		if expectedNextSeq != nil && a.isUniqueConflict(err) {
-			current, currentErr := a.currentNextSeqTx(tx)
-			if currentErr != nil {
-				current = nextSeq
-			}
-			return EventRow{}, &StorageConflictError{
-				Reason:         StorageConflictReason,
-				ExpectedSeq:    *expectedNextSeq,
-				CurrentNextSeq: current,
-			}
+	rows := make([]EventRow, 0, len(drafts))
+	for index, draft := range drafts {
+		row := EventRow{
+			Seq:       nextSeq + index,
+			ID:        draft.ID,
+			Timestamp: draft.Timestamp,
+			Type:      draft.Type,
+			Payload:   clonePayload(draft.Payload),
 		}
-		return EventRow{}, err
+		hash, err := ContentHashForEventRow(row)
+		if err != nil {
+			return nil, err
+		}
+		row.ContentHash = hash
+		payloadJSON, err := jsonString(row.Payload)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := tx.Exec(a.insertEventSQL(), a.workspaceID, a.sessionID, row.Seq, row.ID, row.Timestamp, string(row.Type), payloadJSON, row.ContentHash); err != nil {
+			if expectedNextSeq != nil && a.isUniqueConflict(err) {
+				current, currentErr := a.currentNextSeqTx(tx)
+				if currentErr != nil {
+					current = nextSeq
+				}
+				return nil, &StorageConflictError{
+					Reason:         StorageConflictReason,
+					ExpectedSeq:    *expectedNextSeq,
+					CurrentNextSeq: current,
+				}
+			}
+			return nil, err
+		}
+		rows = append(rows, row)
 	}
 	if err := tx.Commit(); err != nil {
-		return EventRow{}, err
+		return nil, err
 	}
-	return row, nil
+	return rows, nil
 }
 
 func (a *SQLStorageAdapter) EventsSince(cursor *int) ([]EventRow, error) {

@@ -6,6 +6,16 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ### Fixed
 
+- AgentLoop now makes provider-invalid tool transcripts fail closed before any
+  provider invocation. Complete tool calls ending under `max_tokens` or any
+  other non-tool stop reason execute zero tools and are atomically persisted
+  with one durable error result per call, preserving the stop reason. The run
+  returns `incomplete_tool_batch`, and the same Session remains usable on the
+  next message. (#22)
+- Run entry now blocks unresolved approvals and corrupt transcripts before a
+  provider call, while safely resuming remaining calls in a mixed approval
+  batch. A prepared transcript that becomes stale before the actual provider
+  invocation is rejected.
 - Provider streams now fail closed on in-band HTTP-2xx error frames,
   malformed JSON or UTF-8, invalid tool lifecycles, and EOF without each
   provider's required terminal evidence. No consolidated assistant or tool
@@ -21,6 +31,12 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ### Changed
 
+- Provider responses from buffered and streaming paths are staged identically
+  and appended as one semantic batch after terminal response validation.
+- `StorageAdapter` adds atomic `AppendEvents`; memory, file, and SQL adapters
+  implement the same OCC-fenced all-or-none contract. File storage now writes
+  through a synced temporary file and rename rather than truncating the live
+  JSONL file in place.
 - File layout: `OpenAIProjection` and `GeminiProjection` moved out of
   `projection_anthropic.go` into `projection_openai.go` / `projection_gemini.go`
   (one file per provider, matching the ingestor/stream layout). No behavior
@@ -37,6 +53,14 @@ All notable changes to the Go implementation of Harnas are recorded here.
 
 ### Added
 
+- Added `AnalyzeDurableLog`, opaque `PreparedTranscript`,
+  `PrepareProviderCall`, typed integrity violations, and `Log.AppendBatch`.
+  Preparation separately validates immutable durable references and the
+  provider-visible event stream after compact/revert mutations.
+- Added the production `max_tokens` + complete streamed tool-use regression,
+  same-Session recovery assertion, raw Anthropic wire case, multi-tool
+  zero-invocation test, mixed-approval resume test, and memory/file/SQL batch
+  storage laws.
 - Raw provider-wire conformance for Anthropic, OpenAI, and Gemini: 18 logical
   cases and 39 deterministic byte-fragmented executions through the
   production HTTP/SSE parser, with a standalone

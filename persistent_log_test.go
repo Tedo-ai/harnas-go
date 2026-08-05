@@ -21,6 +21,17 @@ func (a *failingAdapter) AppendEvent(draft EventDraft, expectedNextSeq *int) (Ev
 	return a.MemoryStorageAdapter.AppendEvent(draft, expectedNextSeq)
 }
 
+func (a *failingAdapter) AppendEvents(drafts []EventDraft, expectedNextSeq *int) ([]EventRow, error) {
+	if a.appended+len(drafts) > a.failAfter {
+		return nil, a.err
+	}
+	rows, err := a.MemoryStorageAdapter.AppendEvents(drafts, expectedNextSeq)
+	if err == nil {
+		a.appended += len(drafts)
+	}
+	return rows, err
+}
+
 func TestWriteThroughAppendPersistsBeforeMemory(t *testing.T) {
 	adapter := NewMemoryStorageAdapter()
 	session := CreateSession(map[string]any{"tenant": "t1"})
