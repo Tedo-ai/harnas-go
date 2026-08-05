@@ -61,8 +61,8 @@ All notable changes to the Go implementation of Harnas are recorded here.
   same-Session recovery assertion, raw Anthropic wire case, multi-tool
   zero-invocation test, mixed-approval resume test, and memory/file/SQL batch
   storage laws.
-- Raw provider-wire conformance for Anthropic, OpenAI, and Gemini: 18 logical
-  cases and 39 deterministic byte-fragmented executions through the
+- Raw provider-wire conformance for Anthropic, OpenAI, and Gemini: 19 logical
+  cases and 41 deterministic byte-fragmented executions through the
   production HTTP/SSE parser, with a standalone
   `cmd/provider-wire-conformance` runner.
 - Async human-in-the-loop approval primitive (spec 07-permission R7-R11,

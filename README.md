@@ -12,8 +12,8 @@ surfaces needed for real Go adoption.
 
 ## Status
 
-- Agent conformance: 78/78 fixtures passing
-- Raw provider-wire conformance: 18/18 cases and 39/39 deterministic
+- Agent conformance: 79/79 fixtures passing against the Integrity Core spec branch
+- Raw provider-wire conformance: 19/19 cases and 41/41 deterministic
   byte-fragmented executions through the production Anthropic, OpenAI, and
   Gemini stream parsers
 - Buffered and streaming AgentLoop paths
