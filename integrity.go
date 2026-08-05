@@ -1,9 +1,9 @@
 package harnas
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -238,10 +238,14 @@ func effectiveTranscriptHash(events []Event) (string, error) {
 			"payload": event.Payload,
 		})
 	}
-	var canonical bytes.Buffer
-	if err := writeJCSV1(&canonical, rows); err != nil {
+	encoded, err := json.Marshal(rows)
+	if err != nil {
 		return "", err
 	}
-	digest := sha256.Sum256(canonical.Bytes())
+	canonical, err := CanonicalizeJCSV1JSON(encoded)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(canonical)
 	return hex.EncodeToString(digest[:]), nil
 }

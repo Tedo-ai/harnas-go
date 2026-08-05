@@ -54,6 +54,21 @@ func TestPreparedTranscriptZeroValueCannotProject(t *testing.T) {
 	}
 }
 
+func TestPrepareProviderCallCanonicalizesTypedJSONSlices(t *testing.T) {
+	session := CreateSession(nil)
+	session.Log.Append(EventUserMessage, map[string]any{
+		"text": "hello",
+		"tags": []string{"one", "two"},
+	})
+	prepared, err := PrepareProviderCall(session)
+	if err != nil {
+		t.Fatalf("typed JSON slice should be canonicalizable: %v", err)
+	}
+	if prepared.EffectiveHash() == "" {
+		t.Fatal("prepared transcript has no effective hash")
+	}
+}
+
 func TestAnalyzeDurableLogRejectsDuplicateToolIdentity(t *testing.T) {
 	log := NewLog()
 	log.Append(EventToolUse, map[string]any{"id": "duplicate", "name": "a", "arguments": map[string]any{}})
